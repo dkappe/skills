@@ -5,7 +5,7 @@ description: Break down a ticket, task, or feature request into an extremely exp
 
 # Smallify
 
-Turn a ticket into a plan a small model can execute without having to think.
+Turn a ticket into a plan a small model can execute without having to think. Do not modify anything but the ticket. No fixes or implementation.
 
 ## Why this matters
 
@@ -128,6 +128,7 @@ The commands you attach as verification should match the project's own ecosystem
 
 ## Things to watch for
 
+- **Don't modify anything but the ticket.** No code or other files should be touched.
 - **Don't let steps balloon.** More than one find/replace pair, or more than one file, means split the step.
 - **Name exact identifiers.** Function names, variables, file paths, config keys — never "the config file" or "the relevant handler."
 - **State non-obvious ordering explicitly** ("must run after Step 3 because it imports the type added there").
