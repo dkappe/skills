@@ -4,7 +4,7 @@ My agent skills.
 
 Inspired by Matt Pocock.
 
-## smallify
+### smallify
 
 Turns a ticket into a plan a small, local, or otherwise weaker LLM can execute without having to think too hard.
 
