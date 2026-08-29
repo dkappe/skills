@@ -53,6 +53,8 @@ End with a final step tied to the ticket's definition of done — e.g. "run the 
 
 ## Output format
 
+The original ticket file is modified.
+
 ```markdown
 # [Ticket title]
 
