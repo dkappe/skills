@@ -273,6 +273,12 @@ The original ticket file is modified.
 ```markdown
 # [Ticket title]
 
+**What to build:** [what is being built by the ticket]
+
+**Blocked by:** [blocker ticket number] ([blocker ticket title).
+
+**Status:** [done, ready-for-agent, superseded, etc.]
+
 ## Goal
 [1-2 sentence restatement of what "done" means]
 
@@ -296,6 +302,8 @@ The original ticket file is modified.
 
 ## Final check
 [command(s) confirming the whole ticket is done]
+
+Smallified on [date and time]
 ```
 
 ## Example: good vs. bad step
