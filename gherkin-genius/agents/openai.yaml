@@ -1,0 +1,6 @@
+interface:
+  display_name: "Gherkin Genius"
+  short_description: "Write and improve Gherkin feature files, Cucumber.js step definitions, and Playwright-driven UI test automation."
+policy:
+  allow_implicit_invocation: true
+  
