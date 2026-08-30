@@ -1,0 +1,96 @@
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Editors / IDEs ---
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.envrc
+
+# --- Logs ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Node / JS / TS ---
+node_modules/
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+coverage/
+*.tsbuildinfo
+.eslintcache
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+venv/
+.venv/
+env/
+*.egg
+
+# --- Java / JVM ---
+target/
+*.class
+*.jar
+.gradle/
+
+# --- Go ---
+*.exe
+*.exe~
+*.test
+*.out
+vendor/
+
+# --- Rust ---
+target/
+Cargo.lock
+
+# --- Ruby ---
+*.gem
+.bundle/
+
+# --- Archives / temp ---
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# --- Misc build/test artifacts ---
+tmp/
+temp/
+*.local
