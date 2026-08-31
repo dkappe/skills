@@ -1,0 +1,6 @@
+interface:
+  display_name: "Breathing Room"
+  short_description: "Quick, lossy compaction of an in-progress work session's accumulated context."
+policy:
+  allow_implicit_invocation: true
+  
