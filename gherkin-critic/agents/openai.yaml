@@ -1,0 +1,6 @@
+interface:
+  display_name: "Gherkin Critic"
+  short_description: "Audit existing Gherkin feature files, Cucumber.js step definitions, and Playwright/World setup against gherkin-genius's standards, and write the findings to a single markdown report."
+policy:
+  allow_implicit_invocation: false
+  
