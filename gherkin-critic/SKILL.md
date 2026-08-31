@@ -1,6 +1,6 @@
 ---
 name: gherkin-critic
-description: Audit existing Gherkin feature files, Cucumber.js step definitions, and Playwright/World setup against gherkin-genius's standards, and write the findings to a single markdown report. Use this whenever the user asks to review, audit, critique, or analyze existing BDD/Cucumber/Playwright tests, check test coverage against a ticket or spec, or find steps that aren't real UI-layer Playwright tests (steps that import application code, hit a database or internal API directly, or assert on app/store state instead of the rendered page). This skill is read-only except for the one report file it writes — it never edits, fixes, or deletes a feature file, step definition, or support file. Use gherkin-genius alongside this skill when the user wants the flaws actually fixed, not just reported.
+description: Audit existing Gherkin feature files, Cucumber.js step definitions, and Playwright/World setup against gherkin-genius's standards, and write the findings to a single markdown report. Use this whenever the user asks to review, audit, critique, or analyze existing BDD/Cucumber/Playwright tests, check test coverage against a ticket or spec, or find steps that aren't real UI-layer Playwright tests (steps that import application code, hit a database or internal API directly, manipulate localStorage/sessionStorage/cookies/IndexedDB as a shortcut, or assert on app/store/storage state instead of the rendered page). This skill is read-only except for the one report file it writes — it never edits, fixes, or deletes a feature file, step definition, or support file. Use gherkin-genius alongside this skill when the user wants the flaws actually fixed, not just reported.
 ---
 
 # Gherkin Critic
@@ -26,13 +26,14 @@ This skill:
 Find every `.feature` file, every step definition file, the support/`World` setup, and the cucumber config (`cucumber.js`/`cucumber.json`). If the user pointed at a specific ticket, feature area, or subset of files, scope the audit to that; otherwise audit everything found.
 
 ### 2. Read everything before judging anything
-Read the actual current content of each file — don't infer step behavior from its name. A step named `Given the user is logged in` could be driving a real login form or silently seeding a session token; you can only tell by reading the step definition body.
+Read the actual current content of each file — don't infer step behavior from its name. A step named `Given the user is logged in` could be driving a real login form, or it could be a one-line `page.evaluate(() => localStorage.setItem('auth_token', ...))` that fakes the outcome without ever touching the login UI. You can only tell which by reading the step definition body — the step name alone tells you nothing.
 
 ### 3. Check each step definition against the UI-layer rule
 For every step definition, determine whether it:
 - Interacts with the app **only** through a Playwright `Page`/locator/page-object call — flag anything that imports application source (services, controllers, models, reducers, business logic) directly.
 - Avoids direct database or internal-API calls used as a shortcut past the UI (raw SQL/ORM calls, `fetch`/`axios`/`supertest` hitting an internal endpoint instead of the browser navigating there) — unless the scenario's actual subject is that API, which is itself worth flagging as probably belonging in a different suite.
-- Asserts against what's rendered on the page, not against application/store/database state (`expect(store.getState()...)`, reading a model directly, etc.).
+- Avoids manipulating browser storage as a shortcut — `page.evaluate()` writing to `localStorage`/`sessionStorage`, `context.addCookies()`, `addInitScript()` planting a token, or direct IndexedDB writes, used in place of a real UI flow (login, adding items to a cart, accepting a consent banner, etc.). This is a common one to miss because it still runs through Playwright APIs and looks "legitimate" at a glance — check what the `page.evaluate`/`addCookies` call is actually *for*, not just whether Playwright is present in the file.
+- Asserts against what's rendered on the page, not against application/store/database state or browser storage (`expect(store.getState()...)`, reading a model directly, `page.evaluate(() => localStorage.getItem(...))` used as the assertion instead of what the UI shows).
 - Runs on a Playwright-launched browser (`chromium`/`firefox`/`webkit`) — flag any use of Puppeteer, Selenium/WebDriver, jsdom, or a plain HTTP client standing in as the driver.
 - Doesn't rely on manual sleeps (`waitForTimeout`) papering over a race condition.
 
@@ -100,6 +101,7 @@ Write findings to the specified markdown file. Nothing else changes.
 ## Things to watch for
 - **Don't fix anything, even something trivial.** A one-character typo fix is still an edit; note it in the report instead.
 - **Don't guess at an output path.** If the user didn't specify one, ask.
+- **Don't judge a step by its name.** `Given the user is logged in` reads the same whether it drives a real login form or fakes it with a `localStorage`/cookie write — the step definition body is the only source of truth.
 - **Distinguish "wrong driver" from "no driver yet."** A step definition with a `// TODO` and no implementation is a coverage gap, not necessarily a UI-layer violation — say which one it is.
 - **Quote the actual offending line**, not a paraphrase — the report needs to be actionable without the reader re-reading every file themselves.
-- **Don't inflate severity.** A step that reads slightly awkwardly is minor; a step that silently never touches the browser is blocking. Keep the categories meaningful so "blocking" doesn't get diluted.
+- **Don't inflate severity.** A step that reads slightly awkwardly is minor; a step that silently never touches the browser (including via a storage-manipulation shortcut) is blocking. Keep the categories meaningful so "blocking" doesn't get diluted.
