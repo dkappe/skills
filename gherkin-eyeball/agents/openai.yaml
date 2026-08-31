@@ -1,0 +1,6 @@
+interface:
+  display_name: "Gherkin Eyeball"
+  short_description: "Run Gherkin/Cucumber-js/Playwright scenarios, capture screenshots at the checkpoints that matter, and actually look at them to verify the UI genuinely displays what the scenario claims."
+policy:
+  allow_implicit_invocation: true
+  
