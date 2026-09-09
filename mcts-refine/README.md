@@ -97,77 +97,54 @@ The harness is intentionally **dumb**: it never opens or renders artifact conten
 ## Worked Examples
 
 The following sketches show how the same init/step/propose/record/best cycle
-adapts to different artifact types. Every command runs in its own dedicated
-working directory (one tree per CWD); the agent does all content reading and
-writing with its own tools between harness calls.
+adapts to different artifact types. You never run the harness yourself — you
+just describe the task in a prompt to opencode and the agent drives the whole
+cycle (it spins up a dedicated working directory per search — one tree per
+CWD — and does all content reading and writing with its own tools between
+harness calls). What matters from you is the objective, the rubric, and any
+budget/exploration preferences.
 
 ### Example 1: Refining an essay (`essay.md`)
 
 Goal: sharpen a mediocre essay against a rubric — clear thesis, concrete
-evidence, tight prose. Text is malleable, so medium `wildness` works well.
+evidence, tight prose. Text is malleable, so medium exploration works well.
 
-```bash
-mkdir run-essay && cd run-essay
-python ../run_mcts.py init --state-file ../essay.md --iterations 40 \
-  --batch-size 4 --wildness 0.25 \
-  --moves '[
-    {"desc":"Sharpen thesis to one falsifiable sentence at the top","prior":0.35,"risk":"safe"},
-    {"desc":"Add a concrete counterexample paragraph to section 2","prior":0.3,"risk":"bold"},
-    {"desc":"Cut the 3 weakest paragraphs and renumber sections","prior":0.2,"risk":"bold"},
-    {"desc":"Restructure the whole essay as thesis/antithesis/synthesis","prior":0.15,"risk":"wild"}]'
-
-# Loop (40 times): step -> realize the named move -> record
-python ../run_mcts.py step
-# status=ready_for_eval, target_action_id=act_1, action_risk=safe
-# ... read .mcts_artifacts/n_0.state, apply the move, write ../run-essay-draft.txt ...
-python ../run_mcts.py record --node-id n_0 --action-id act_1 \
-  --new-state-path ../run-essay-draft.txt --value 0.62 \
-  --moves '[{"desc":"Replace anecdote with cited statistic","prior":0.4,"risk":"safe"},
-            {"desc":"Tighten every paragraph to <= 4 sentences","prior":0.35,"risk":"bold"},
-            {"desc":"Rewrite entire essay in second person","prior":0.25,"risk":"wild"}]'
-
-python ../run_mcts.py best   # last state_ref = refined essay
+```text
+Refine essay.md with MCTS against this rubric: a clear falsifiable thesis
+at the top, concrete evidence in every section, tight prose.
+40 iterations, medium exploration.
 ```
 
-Typical move vocabulary for essays: sharpen/cut/reorder arguments, add
-evidence or counterexamples, tighten prose, change register or voice. Values
-should track the rubric, not the prior — a "wild" restructure scoring 0.8 is
-exactly the kind of surprise the search exists to find.
+The agent will propose batches mixing safe moves (sharpen/cut/reorder
+arguments, tighten prose) with bold ones (add evidence or counterexamples)
+and the occasional wild restructure (e.g. thesis/antithesis/synthesis). The
+critic values track the rubric, not the priors — a "wild" restructure scoring
+0.8 is exactly the kind of surprise the search exists to find. When the
+budget is spent, it reports back the top-ranked concepts and their refined
+essays.
 
 ### Example 2: Writing a sonnet about AI from scratch
 
 Goal: a Shakespearean sonnet (14 lines, ABAB CDCD EFEF GG, iambic pentameter).
-The "artifact" starts as a seed file containing your first rough attempt (even
-a single couplet — write it to a file first; `--state-file` requires a path).
+Since the artifact must be a path, you paste your first rough attempt (even a
+single couplet) and the agent starts from there.
 
-```bash
-echo "The machines we taught to speak now speak of us." > seed.txt
-mkdir run-sonnet && cd run-sonnet
-python ../run_mcts.py init --state-file ../seed.txt --iterations 30 \
-  --batch-size 4 --wildness 0.35 \
-  --moves '[
-    {"desc":"Complete quatrain 1 with ABAB rhyme (speak/us -> week/becomes)","prior":0.4,"risk":"safe"},
-    {"desc":"Draft the volta turn at line 9: from capability to consequence","prior":0.35,"risk":"bold"},
-    {"desc":"Abandon the opening line entirely; start from the machine POV","prior":0.25,"risk":"wild"}]'
+```text
+Write a Shakespearean sonnet about AI with MCTS. Start from this couplet:
 
-# Loop (30 times): step -> realize -> record. Score against:
-# form (meter+rhyme) 40%, imagery freshness 35%, thematic depth 25%.
-python ../run_mcts.py step
-# ... write the new full sonnet draft to ../sonnet-draft.txt ...
-python ../run_mcts.py record --node-id n_0 --action-id act_2 \
-  --new-state-path ../sonnet-draft.txt --value 0.55 \
-  --moves '[{"desc":"Fix line 11 meter: and quiet grows -> and quietly it grows","prior":0.45,"risk":"safe"},
-            {"desc":"Swap cliche brave-new-world for concrete robotics imagery","prior":0.35,"risk":"bold"},
-            {"desc":"Invert the volta: make the machine the anxious one","prior":0.2,"risk":"wild"}]'
+    The machines we taught to speak now speak of us.
 
-python ../run_mcts.py best
+30 iterations, and push exploration higher than usual — formal constraints
+make incremental edits plateau. Score against: form (meter+rhyme) 40%,
+imagery freshness 35%, thematic depth 25%.
 ```
 
-Note: each state is the *complete current sonnet*, so a move can be as small
-as fixing one line's meter — the state just has to always contain all 14
-lines. Poetry rewards higher `wildness` (0.3–0.4): formal constraints make
-incremental edits plateau quickly, while a POV or volta inversion can break a
-plateau.
+The agent writes the seed to a file itself, then explores: completing
+quatrains, moving the volta, even inverting the POV mid-search. Each state is
+the *complete current sonnet*, so a move can be as small as fixing one line's
+meter — the state just has to always contain all 14 lines. Poetry rewards
+that higher exploration (0.3–0.4): a POV or volta inversion can break a
+plateau that incremental polish never would.
 
 ### Example 3: Refining a proof about infinite prime pairs (`proof.md`)
 
@@ -175,69 +152,39 @@ Goal: tighten a draft argument about infinitely many prime pairs (twin-prime
 style) toward rigor. Math needs the most careful critic scoring — an
 emotive-sounding paragraph can score 0.9, but a proof step with a hidden
 uniformity assumption is a 0.2 no matter how good the prose looks. Keep
-`wildness` low; speculative "wild" math usually wastes iterations.
+exploration low; speculative math usually wastes iterations.
 
-```bash
-mkdir run-proof && cd run-proof
-python ../run_mcts.py init --state-file ../proof.md --iterations 50 \
-  --batch-size 3 --wildness 0.15 \
-  --moves '[
-    {"desc":"State the sieve bound as a numbered lemma with explicit constants","prior":0.4,"risk":"safe"},
-    {"desc":"Replace the informal for-large-enough-x with an explicit epsilon-N definition","prior":0.35,"risk":"safe"},
-    {"desc":"Reorganize: prove the parity barrier lemma before the main argument","prior":0.25,"risk":"bold"}]'
-
-# Loop (50 times): step -> realize -> record. Score against:
-# logical validity (dominant weight), completeness of cases, clarity of exposition.
-# A move that silently strengthens an unstated hypothesis must be scored LOW
-# even if the resulting text reads cleaner.
-python ../run_mcts.py step
-# ... edit the proof, write ../proof-v2.md ...
-python ../run_mcts.py record --node-id n_0 --action-id act_3 \
-  --new-state-path ../proof-v2.md --value 0.48 \
-  --moves '[{"desc":"Add the missing Case 2 for p ≡ 1 (mod 4)","prior":0.5,"risk":"safe"},
-            {"desc":"Factor the counting argument into its own subsection","prior":0.3,"risk":"safe"},
-            {"desc":"Switch the whole approach to Selberg sieve weights","prior":0.2,"risk":"bold"}]'
-
-python ../run_mcts.py best
+```text
+Refine proof.md with MCTS toward rigor. It argues for infinitely many prime
+pairs (twin-prime style). Score moves against: logical validity (dominant
+weight), completeness of cases, clarity of exposition. Be a harsh critic —
+a move that silently strengthens an unstated hypothesis must score LOW even
+if the resulting text reads cleaner.
+50 iterations, low exploration, no speculative rewrites.
 ```
 
-The rubric dominance matters here: score `value = 0.7*(rigor) + 0.2*(case
-completeness) + 0.1*(clarity)` and be harsh — an unproven "standard" step
-caps the whole state's value around 0.5 regardless of polish.
+The agent will weight its scoring like `value = 0.7*(rigor) + 0.2*(case
+completeness) + 0.1*(clarity)` — an unproven "standard" step caps the whole
+state's value around 0.5 regardless of polish, so the search grinds toward
+lemmas and explicit epsilon-N definitions rather than prettier prose.
 
 ### Example 4: Refining a directory (HTML/CSS/assets) toward an AAA web design
 
 Goal: turn a plain multi-page site into a polished AAA-game-quality design.
 The artifact is a directory, so every state is a full directory copy — the
-agent edits a copy of the tree, then points `record` at it. Structure changes
-(new files, renamed assets) are normal moves here.
+agent edits a copy of the tree per move. Structure changes (new files,
+renamed assets) are normal moves here.
 
-```bash
-mkdir run-website && cd run-website
-python ../run_mcts.py init --state-file ../site/ --iterations 60 \
-  --batch-size 4 --wildness 0.3 \
-  --moves '[
-    {"desc":"Establish a design-token system: add tokens.css with type/color/spacing scale","prior":0.35,"risk":"safe"},
-    {"desc":"Rebuild index.html hero with layered gradients, glass cards, animated CTA","prior":0.3,"risk":"bold"},
-    {"desc":"Introduce scroll-driven parallax + staggered section reveals in main.js","prior":0.25,"risk":"wild"},
-    {"desc":"Swap the whole palette to a dark neon theme with gradient accents","prior":0.1,"risk":"wild"}]'
-
-# Loop (60 times): step -> read the whole state tree -> edit a copy -> record
-python ../run_mcts.py step
-# status=ready_for_eval -> read .mcts_artifacts/n_0.state/ (index.html, css/, js/, assets/)
-# ... make edits on a copy: cp -r .mcts_artifacts/n_0.state ../site-draft && edit ../site-draft ...
-python ../run_mcts.py record --node-id n_0 --action-id act_2 \
-  --new-state-path ../site-draft --value 0.55 \
-  --moves '[{"desc":"Add hover micro-interactions and focus states to all CTAs","prior":0.35,"risk":"safe"},
-            {"desc":"Design a consistent nav + footer system across all pages","prior":0.3,"risk":"bold"},
-            {"desc":"Add a WebGL/canvas background layer with particle field","prior":0.2,"risk":"wild"},
-            {"desc":"Convert all raster icons to inline SVG sprite system","prior":0.15,"risk":"bold"}]'
-
-python ../run_mcts.py best   # last state_ref = the whole refined site directory
+```text
+Refine the site in ./site/ with MCTS into a AAA-game-quality web design:
+design-token system, layered gradients and glass cards, scroll-driven
+reveals, consistent nav/footer across all pages. 60 iterations, moderate
+exploration. Judge each state as a coherent whole — visual hierarchy,
+cross-page consistency, performance sanity — not as isolated pages.
 ```
 
-Directory tips: keep `--iterations` moderate (directories multiply the
-content you regenerate per move); score the state as a *coherent whole*
-(visual hierarchy, consistency across pages, performance sanity), and treat
-"added a file" as part of the move description — e.g. "Add `tokens.css`
-defining the spacing scale" — since the trajectory should read as a changelog.
+The agent reads the whole state tree each round, edits a copy, and scores it
+as a unit; "added `tokens.css` defining the spacing scale" shows up in the
+trajectory like a changelog entry. Directory tips: keep the iteration budget
+moderate (directories multiply the content regenerated per move), and treat
+"added a file" as part of the move description.
