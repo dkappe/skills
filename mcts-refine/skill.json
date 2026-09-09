@@ -1,0 +1,25 @@
+{
+  "name": "mcts_refine",
+  "description": "Performs Monte Carlo Tree Search with PUCT and progressive widening to iteratively refine text, code, or images.",
+  "version": "1.0.0",
+  "entrypoint": "run_mcts.py",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "initial_file": {
+        "type": "string",
+        "description": "Path to the initial artifact (text, markdown, code, or prompt)."
+      },
+      "iterations": {
+        "type": "integer",
+        "description": "Number of MCTS iterations to execute.",
+        "default": 100
+      },
+      "objective": {
+        "type": "string",
+        "description": "The target rubric, aesthetic goal, or refinement standard."
+      }
+    },
+    "required": ["initial_file", "objective"]
+  }
+}

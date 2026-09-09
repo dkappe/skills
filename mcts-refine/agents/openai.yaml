@@ -1,0 +1,5 @@
+interface:
+  display_name: "MCTS Refine"
+  short_description: "Iteratively refine text, code, prompts, or designs via Monte Carlo Tree Search (PUCT + progressive widening)."
+policy:
+  allow_implicit_invocation: true
