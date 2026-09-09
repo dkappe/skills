@@ -35,6 +35,28 @@ The harness has NO internal loop and calls no model. You drive it.
 - If you notice yourself about to write a `.py`/`.js`/`.sh` file whose
   purpose is to drive iterations, score states, or manage the tree, stop —
   that's the harness's job. Call `run_mcts.py` instead.
+- **Named anti-pattern: do not parallelize `step`/`record` against a shared
+  tree.** Firing concurrent `step`/`record` calls (threads, background
+  processes, batched subprocess calls) at the *same* `.mcts_tree.json` is not
+  a clever speedup — there is no locking, so racing reads/writes can corrupt
+  the tree (lost updates, duplicate node IDs from a stale `_node_counter`,
+  broken parent/child links) silently, with no error to warn you. It also
+  breaks PUCT itself: `select()` depends on the *previous* call's
+  backpropagated visit counts being visible before the next selection runs —
+  concurrent calls select against stale statistics, defeating the exploration
+  term. MCTS over one tree is inherently sequential; there is no legitimate
+  way to run it "in parallel" against a single `.mcts_tree.json`. If you
+  genuinely need concurrency, the only sound form is *root parallelization*:
+  separate `init` runs in separate working directories (different CWDs, each
+  with its own tree), compared/merged only at the end by looking at each run's
+  `best` output side by side — never by touching another run's tree file.
+- **The search's wall-clock speed is not your concern and is not a signal
+  to act on.** Each iteration is one LLM round-trip by design — that is the
+  cost of a real policy+critic step, not inefficiency to fix. Slowness is
+  never a valid reason to parallelize, batch-fake iterations, shortcut
+  scoring, reduce the budget without being asked, or otherwise deviate from
+  the documented loop. If the budget feels large, that's a decision for the
+  user to make via `--iterations`, not something to route around mid-run.
 
 ## Cleanup discipline (leave the directory tidy)
 
@@ -141,7 +163,20 @@ search's working directory** — not into the chat.
   One coherent change per move: *"Tighten the intro to two sentences and add a
   concrete benchmark table"*, not *"improve everything"*.
 - Generate **distinct** sibling moves — genuinely different directions
-  (restructure vs. add evidence vs. cut length), not near-duplicates.
+  (restructure vs. add evidence vs. cut length), not near-duplicates. This
+  applies within a batch (siblings), but also **check the lineage**: before
+  proposing a new batch for a node, glance at the `action` labels already
+  applied on the path from ROOT to that node (visible in `step`'s
+  `existing_actions`/trajectory context, or `best`'s `trajectory` once
+  available) and don't re-propose a move that's essentially the same thing
+  already done one or two levels up. "Add concrete benchmarks" chosen at
+  depth 2 and then proposed again, near-verbatim, as a depth-3 child move is
+  wasted budget, not refinement — the artifact already has that change; the
+  next batch should build on it or try something new, not repeat it. A
+  string of near-identical moves winning selection in a row is a signal your
+  batches aren't actually distinct from what's already in the state, not
+  that the search "wants" that move — diversify the next batch instead of
+  reproposing it.
 - The `desc` is what shows up in the `best` trajectory, so make it a readable
   changelog entry. The actual change is only produced later, lazily, when
   PUCT actually selects that move for expansion (see Workflow).
