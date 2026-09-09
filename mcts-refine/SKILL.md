@@ -18,6 +18,45 @@ artifact content. The harness just hands you a path.
 
 The harness has NO internal loop and calls no model. You drive it.
 
+## Guardrails: use the harness as-is, don't go around it
+
+- **Never write your own script to reimplement, simulate, or replace this
+  search.** Don't author a Python/JS/shell/etc. program that does your own
+  tree search, PUCT math, priors, or batch orchestration instead of calling
+  `python run_mcts.py init/step/propose/record/best`. The engine and CLI are
+  already implemented and tested — reinventing them mid-task is exactly what
+  this skill exists to prevent. Every search-related action is one of the
+  five documented subcommands, invoked via `bash`, nothing else.
+- **This restriction is about the search mechanics, not the artifact.** If
+  the artifact *being refined* is itself code or a script, writing/editing
+  that code is the whole point — do it freely with your normal tools. The
+  line is: harness logic (tree, selection, bookkeeping) = never
+  reimplemented; artifact content (which may be code) = yours to write.
+- If you notice yourself about to write a `.py`/`.js`/`.sh` file whose
+  purpose is to drive iterations, score states, or manage the tree, stop —
+  that's the harness's job. Call `run_mcts.py` instead.
+
+## Cleanup discipline (leave the directory tidy)
+
+- All search scaffolding is disposable: `.mcts_tree.json`, `.mcts_artifacts/`,
+  and any scratch files/directories you created along the way to hold an
+  edited state before `record` (e.g. `edited-draft.txt`, temp directory
+  copies) — anything that isn't the original artifact, `refine.md`, or the
+  final `one`/`two`/`three` deliverables.
+- **Delete all of it once `best` has run and `one`/`two`/`three` are safely
+  copied out.** After verifying the delivered copies exist on disk and are
+  complete, remove `.mcts_tree.json`, `.mcts_artifacts/`, and every scratch
+  intermediate-state file/dir you made during the loop (`rm -rf`/`rm` with
+  your bash tool). Do this as the last step of every search, no exceptions —
+  don't leave a `.mcts_tree.json` or `.mcts_artifacts/` sitting in the
+  working directory once the run is delivered.
+- Keep only: the original artifact (untouched), `refine.md` (the log,
+  finished with its summary), and `one`/`two`/`three`. Nothing else should
+  remain in the search's working directory afterward.
+- If the search is interrupted or abandoned before `best` (rare — see "Do
+  not stop early" below), leave the tree/artifacts in place so it can be
+  resumed with `step`; only clean up once a run actually finishes.
+
 ## Reporting discipline (user-facing output)
 
 While the search runs, the stats go to a log file — **`refine.md` in the
@@ -153,6 +192,22 @@ search's working directory** — not into the chat.
   `--action-id`) is exempt from this — there's only one entry, so its prior is
   used as-is. Prefer batched `--moves` whenever you can see more than one
   reasonable next step.
+
+### Avoiding shell-quoting breakage
+Move descriptions and artifact text routinely contain quotes, apostrophes, or
+backticks (quoting a line of prose, a code snippet, etc.), which breaks
+inline shell arguments. **Always use the file-based forms, never inline
+JSON/text on the command line:**
+- `--moves` (init/propose/record) → write the JSON array with your Write tool
+  to a scratch file (e.g. `.mcts_scratch/moves.json`) and pass
+  `--moves-file <path>` instead. This is a scratch file — clean it up with
+  the rest of the search scaffolding.
+- `--desc` (record's ad hoc single-move fallback) → write the description
+  text to a scratch file and pass `--desc-file <path>` instead.
+- The artifact itself (`--state-file`/`--new-state-path`) is already
+  path-based, so it's unaffected — only move/description *text* is at risk.
+- Treat inline `--moves`/`--desc` as a shortcut for trivial, quote-free
+  strings only; default to the `-file` variants whenever in doubt.
 
 ### How to assign a VALUE (evaluation)
 - Score the **resulting state against the objective**, independent of the prior.
@@ -293,6 +348,12 @@ finishing early.
    `iterations_done`/`target_iterations`, `total_nodes`, and
    `tree_max_depth` as a confirmation the full search ran.
 
+4. **Clean up.** Once `one`/`two`/`three` are copied out and confirmed on
+   disk, delete `.mcts_tree.json`, `.mcts_artifacts/`, and any scratch
+   intermediate-state files/dirs you created during the loop for `record`
+   calls — see "Cleanup discipline" above. This is a required last step of
+   every run, not optional tidying.
+
 ## Tuning knobs (in `engine.py`, optional)
 - `c_puct` (1.414): higher = more exploration of high-prior branches.
 - `max_depth` (0 = unlimited): longest single refinement chain. Unlimited by
@@ -316,3 +377,10 @@ directory to avoid collisions. There is exactly one tree and one root per
 directory; `init` refuses to overwrite an existing tree (unless you explicitly
 pass `--force-restart`), and `step`/`propose`/`record` error out if no tree
 exists yet.
+
+**Both are scratch, not deliverables** — they exist only to let the search
+resume via `step` while it's in progress. Once `best` has run and
+`one`/`two`/`three` are delivered, delete them (see "Cleanup discipline").
+A finished search directory should contain only the original artifact,
+`refine.md`, and `one`/`two`/`three` — not `.mcts_tree.json` or
+`.mcts_artifacts/`.

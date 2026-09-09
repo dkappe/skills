@@ -227,14 +227,18 @@ def cmd_record(args):
     else:
         # Fallback: ad hoc single move, not part of a batch proposal. Not
         # normalized against siblings — prefer `propose` + `--action-id`.
-        if not args.desc or args.prior is None:
+        desc = args.desc
+        if args.desc_file:
+            desc = Path(args.desc_file).read_text()
+        if not desc or args.prior is None:
             raise ValueError(
-                "Must supply --action-id (from a proposed batch) or both --desc and --prior "
-                "for an ad hoc move."
+                "Must supply --action-id (from a proposed batch) or both --prior and a "
+                "description (--desc, or --desc-file to avoid shell-quoting issues) for an "
+                "ad hoc move."
             )
         action_id = f"act_{len(parent.actions) + 1}"
         parent.actions[action_id] = Action(
-            action_id=action_id, description=args.desc, prior=args.prior, risk=args.risk or "bold"
+            action_id=action_id, description=desc, prior=args.prior, risk=args.risk or "bold"
         )
 
     new_node_id = engine.next_id()
@@ -425,6 +429,11 @@ if __name__ == "__main__":
     p_record.add_argument("--node-id", required=True)
     p_record.add_argument("--action-id", default=None, help="A stub action from step/propose to realize.")
     p_record.add_argument("--desc", default=None, help="Ad hoc move (fallback if --action-id is omitted).")
+    p_record.add_argument(
+        "--desc-file", default=None,
+        help="Read the ad hoc move description from a file instead of --desc, to avoid shell "
+             "quoting problems when the text contains quotes/apostrophes/special characters."
+    )
     p_record.add_argument("--prior", type=float, default=None, help="Ad hoc move prior (fallback).")
     p_record.add_argument("--risk", default=None, choices=["safe", "bold", "wild"], help="Ad hoc move risk tag (fallback).")
     p_record.add_argument(
