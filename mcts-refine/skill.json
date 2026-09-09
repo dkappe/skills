@@ -8,7 +8,7 @@
     "properties": {
       "initial_file": {
         "type": "string",
-        "description": "Path to the initial artifact (text, markdown, code, or prompt)."
+        "description": "Path to the artifact to refine — a file (text, markdown, code, prompt) or a directory (e.g. a multi-file project). Required: the artifact must be specified by path, not as inline text."
       },
       "iterations": {
         "type": "integer",

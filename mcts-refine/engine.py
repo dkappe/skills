@@ -4,12 +4,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+RISK_LEVELS = ("safe", "bold", "wild")
+
+
 class Action:
-    def __init__(self, action_id: str, description: str, prior: float, diff_ref: Optional[str] = None):
+    def __init__(
+        self,
+        action_id: str,
+        description: str,
+        prior: float,
+        diff_ref: Optional[str] = None,
+        risk: str = "bold",
+    ):
         self.action_id = action_id
         self.description = description
         self.prior = float(prior)
         self.diff_ref = diff_ref
+        self.risk = risk if risk in RISK_LEVELS else "bold"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -17,6 +28,7 @@ class Action:
             "description": self.description,
             "prior": self.prior,
             "diff_ref": self.diff_ref,
+            "risk": self.risk,
         }
 
     @classmethod
@@ -26,6 +38,7 @@ class Action:
             description=data["description"],
             prior=data["prior"],
             diff_ref=data.get("diff_ref"),
+            risk=data.get("risk", "bold"),
         )
 
 
@@ -87,11 +100,17 @@ class JsonMCTSEngine:
         widening_c: float = 1.5,
         widening_alpha: float = 0.5,
         max_depth: int = 0,
+        target_iterations: int = 100,
+        batch_size: int = 4,
+        wildness: float = 0.25,
     ):
         self.c_puct = c_puct
         self.widening_c = widening_c
         self.widening_alpha = widening_alpha
         self.max_depth = max_depth
+        self.target_iterations = target_iterations
+        self.batch_size = batch_size
+        self.wildness = wildness
         self.nodes: Dict[str, MCTSNode] = {}
         self.root_id: Optional[str] = None
         self._node_counter: int = 0
@@ -100,35 +119,129 @@ class JsonMCTSEngine:
         self._node_counter += 1
         return f"n_{self._node_counter}"
 
-    def should_widen(self, node: MCTSNode) -> bool:
-        allowed = math.floor(self.widening_c * (node.visit_count ** self.widening_alpha))
-        return len(node.children) < max(1, allowed)
+    def iterations_done(self) -> int:
+        return max(0, len(self.nodes) - 1)
 
-    def select(self) -> Tuple[List[MCTSNode], bool]:
+    def depth_of(self, node_id: str) -> int:
+        depth = 0
+        curr = self.nodes.get(node_id)
+        while curr and curr.parent_id:
+            depth += 1
+            curr = self.nodes.get(curr.parent_id)
+        return depth
+
+    def tree_max_depth(self) -> int:
+        if not self.nodes:
+            return 0
+        return max(self.depth_of(nid) for nid in self.nodes)
+
+    def add_actions(self, node: MCTSNode, moves: List[Dict[str, Any]]) -> Tuple[List[str], Optional[str]]:
+        """Register a batch of candidate moves (description + prior + optional
+        risk) on a node as unexpanded ("stub") actions — no child node/state/
+        value yet, matching an AlphaZero-style policy-head output. Priors are
+        expected to sum to 1.0 across the batch; if they don't (within 1e-3),
+        they are normalized and a warning is returned (normalize-and-warn, not
+        a hard rejection).
+
+        Each move may carry a "risk" tag — one of "safe" (incremental,
+        high-confidence), "bold" (default; a real structural change), or
+        "wild" (long-shot, experimental, break-the-mold). This is bookkeeping
+        only: the harness never generates moves itself, so it can't enforce a
+        risk mix, but it will nudge with a warning if a sizeable batch has zero
+        "wild" entries while the engine's configured `wildness` target is > 0.
+        """
+        if not moves:
+            return [], None
+
+        parsed = [
+            {
+                "desc": m["desc"],
+                "prior": float(m["prior"]),
+                "risk": m.get("risk", "bold") if m.get("risk") in RISK_LEVELS else "bold",
+            }
+            for m in moves
+        ]
+        total = sum(m["prior"] for m in parsed)
+        warnings: List[str] = []
+        epsilon = 1e-3
+
+        if abs(total - 1.0) > epsilon:
+            if total <= 0:
+                n = len(parsed)
+                for m in parsed:
+                    m["prior"] = 1.0 / n
+                warnings.append(
+                    f"Priors summed to {total:.4f} (<= 0); could not scale, "
+                    f"reset to uniform 1/{n} each instead."
+                )
+            else:
+                for m in parsed:
+                    m["prior"] = m["prior"] / total
+                warnings.append(
+                    f"Priors summed to {total:.4f}, not 1.0 (+/- {epsilon}); "
+                    f"normalized by dividing each by {total:.4f}."
+                )
+
+        wild_count = sum(1 for m in parsed if m["risk"] == "wild")
+        if self.wildness > 0 and len(parsed) >= 3 and wild_count == 0:
+            expected = max(1, round(len(parsed) * self.wildness))
+            warnings.append(
+                f"No move in this batch of {len(parsed)} was tagged \"wild\", but the configured "
+                f"wildness is {self.wildness:.2f} (~{expected} wild move(s) expected per batch of this "
+                f"size). Consider adding a higher-risk/experimental option."
+            )
+
+        action_ids = []
+        for m in parsed:
+            action_id = f"act_{len(node.actions) + 1}"
+            node.actions[action_id] = Action(
+                action_id=action_id, description=m["desc"], prior=m["prior"], risk=m["risk"]
+            )
+            action_ids.append(action_id)
+        return action_ids, ("; ".join(warnings) if warnings else None)
+
+    def select(self) -> Tuple[List[MCTSNode], Optional[str], bool]:
+        """Walk down the tree via PUCT over a node's full action set (expanded
+        children AND unexpanded stub actions treated as q=0/visits=0, i.e. First
+        Play Urgency) — mirroring how AlphaZero selects among all known policy
+        edges, not just already-visited ones.
+
+        Returns (path, pending_action_id, needs_moves):
+        - needs_moves=True: path[-1] has no actions registered yet; the caller
+          must propose a batch of moves (with priors) for it before anything can
+          be expanded.
+        - pending_action_id set: PUCT chose an unexpanded stub action on
+          path[-1]; the caller should realize it (generate state + value).
+        - both falsy: path[-1] is terminal or depth-capped with nothing left to
+          do.
+        """
         if self.root_id is None:
             raise ValueError("Search tree has no root; call init first.")
         path = [self.nodes[self.root_id]]
-        while (
-            path[-1].children
-            and not path[-1].is_terminal
-            and (self.max_depth <= 0 or len(path) <= self.max_depth)
-        ):
+        while True:
             curr = path[-1]
-            if self.should_widen(curr):
-                return path, True
+            if curr.is_terminal:
+                return path, None, False
+            if self.max_depth > 0 and len(path) > self.max_depth:
+                return path, None, False
+            if not curr.actions:
+                return path, None, True
 
-            best_aid = max(
-                curr.children.keys(),
-                key=lambda aid: (
-                    self.nodes[curr.children[aid]].q_value
-                    + self.c_puct
-                    * curr.actions[aid].prior
-                    * (math.sqrt(curr.visit_count) / (1.0 + self.nodes[curr.children[aid]].visit_count))
-                ),
-            )
-            path.append(self.nodes[curr.children[best_aid]])
+            def score(aid: str) -> float:
+                act = curr.actions[aid]
+                child_id = curr.children.get(aid)
+                if child_id is not None:
+                    child = self.nodes[child_id]
+                    q, n = child.q_value, child.visit_count
+                else:
+                    q, n = 0.0, 0
+                return q + self.c_puct * act.prior * (math.sqrt(curr.visit_count) / (1.0 + n))
 
-        return path, len(path[-1].children) == 0
+            best_aid = max(curr.actions.keys(), key=score)
+            child_id = curr.children.get(best_aid)
+            if child_id is None:
+                return path, best_aid, False
+            path.append(self.nodes[child_id])
 
     def backpropagate(self, path: List[MCTSNode], value: float) -> None:
         for node in reversed(path):
@@ -144,6 +257,9 @@ class JsonMCTSEngine:
                 "widening_c": self.widening_c,
                 "widening_alpha": self.widening_alpha,
                 "max_depth": self.max_depth,
+                "target_iterations": self.target_iterations,
+                "batch_size": self.batch_size,
+                "wildness": self.wildness,
                 "node_counter": self._node_counter,
             },
             "root_id": self.root_id,
@@ -163,6 +279,9 @@ class JsonMCTSEngine:
             widening_c=meta.get("widening_c", 1.5),
             widening_alpha=meta.get("widening_alpha", 0.5),
             max_depth=meta.get("max_depth", 0),
+            target_iterations=meta.get("target_iterations", 100),
+            batch_size=meta.get("batch_size", 4),
+            wildness=meta.get("wildness", 0.25),
         )
         engine._node_counter = meta.get("node_counter", 0)
         engine.root_id = data.get("root_id")

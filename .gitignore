@@ -89,8 +89,14 @@ Cargo.lock
 *.temp
 *.bak
 *.orig
+.tmp/
 
 # --- Misc build/test artifacts ---
 tmp/
 temp/
 *.local
+
+# --- opencode ---
+.opencode/
+opencode.json
+
