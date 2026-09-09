@@ -44,6 +44,21 @@ def copy_state(src: Path, dest: Path) -> str:
     return "file"
 
 
+def stats_block(engine: JsonMCTSEngine) -> dict:
+    """Shared progress block: iteration progress, node count, tree depth, and
+    the LC0-style root readout (the root's candidate moves ranked by visits).
+    Pure tree bookkeeping from .mcts_tree.json — the harness never reads
+    artifact content."""
+    return {
+        "iterations_done": engine.iterations_done(),
+        "target_iterations": engine.target_iterations,
+        "iterations_remaining": max(0, engine.target_iterations - engine.iterations_done()),
+        "total_nodes": len(engine.nodes),
+        "tree_max_depth": engine.tree_max_depth(),
+        "root_children": engine.root_children_stats(top_n=3),
+    }
+
+
 def cmd_init(args):
     if not args.state_file:
         raise ValueError(
@@ -98,7 +113,8 @@ def cmd_init(args):
         "target_wildness": engine.wildness,
         "proposed_action_ids": proposed_action_ids,
         "proposed_moves_warning": warning,
-        "forced_restart": bool(args.force_restart)
+        "forced_restart": bool(args.force_restart),
+        **stats_block(engine)
     }))
 
 
@@ -131,8 +147,7 @@ def cmd_propose(args):
         "warning": warning,
         "target_batch_size": engine.batch_size,
         "target_wildness": engine.wildness,
-        "total_nodes": len(engine.nodes),
-        "tree_max_depth": engine.tree_max_depth()
+        **stats_block(engine)
     }))
 
 
@@ -188,13 +203,9 @@ def cmd_step(args):
         "depth": len(path) - 1,
         "q_value": leaf.q_value,
         "visits": leaf.visit_count,
-        "iterations_done": iterations_done,
-        "target_iterations": target,
-        "iterations_remaining": max(0, target - iterations_done),
         "target_batch_size": engine.batch_size,
         "target_wildness": engine.wildness,
-        "total_nodes": len(engine.nodes),
-        "tree_max_depth": engine.tree_max_depth()
+        **stats_block(engine)
     }))
 
 
@@ -265,21 +276,16 @@ def cmd_record(args):
         "score": args.value,
         "proposed_action_ids": proposed_action_ids,
         "proposed_moves_warning": moves_warning,
-        "iterations_done": iterations_done,
-        "target_iterations": target,
-        "iterations_remaining": max(0, target - iterations_done),
         "target_reached": iterations_done >= target,
         "target_batch_size": engine.batch_size,
         "target_wildness": engine.wildness,
-        "total_nodes": len(engine.nodes),
-        "tree_max_depth": engine.tree_max_depth()
+        **stats_block(engine)
     }))
 
 
 def cmd_best(args):
     engine = get_engine()
     k = args.top
-    curr = engine.nodes[engine.root_id]
 
     trajectories = []  # (first_child_node_id, trajectory) so sibling candidates stay comparable
 
@@ -317,13 +323,15 @@ def cmd_best(args):
     # Candidate roots: each expanded child of the search root defines one
     # top-level "concept" (a distinct first move). Walk each concept's
     # robust-child trajectory; rank concepts by leaf visit count, tie-break on Q.
+    if not engine.root_id or engine.root_id not in engine.nodes:
+        raise ValueError("Search tree has no root; run init first.")
+    root = engine.nodes[engine.root_id]
     first_children = sorted(
-        (engine.nodes[cid] for cid in engine.nodes[engine.root_id].children.values()),
+        (engine.nodes[cid] for cid in root.children.values()),
         key=lambda n: (n.visit_count, n.q_value),
         reverse=True,
     )
 
-    root = engine.nodes[engine.root_id]
     for child in first_children:
         traj = walk(child)
         # Prepend the shared root context.
@@ -343,6 +351,8 @@ def cmd_best(args):
             "final_q_value": leaf["q_value"],
             "final_visits": leaf["visits"],
             "depth": len(traj) - 1,
+            "subtree_nodes": engine.subtree_size(child.node_id),
+            "subtree_depth": engine.subtree_max_depth(child.node_id),
             "trajectory": traj
         })
 
@@ -358,6 +368,8 @@ def cmd_best(args):
                 "final_q_value": t["final_q_value"],
                 "final_visits": t["final_visits"],
                 "depth": t["depth"],
+                "subtree_nodes": t["subtree_nodes"],
+                "subtree_depth": t["subtree_depth"],
                 "leaf_state_ref": t["trajectory"][-1]["state_ref"],
                 "trajectory": t["trajectory"]
             }
@@ -366,7 +378,8 @@ def cmd_best(args):
         "iterations_done": engine.iterations_done(),
         "target_iterations": engine.target_iterations,
         "total_nodes": len(engine.nodes),
-        "tree_max_depth": engine.tree_max_depth()
+        "tree_max_depth": engine.tree_max_depth(),
+        "root_children": engine.root_children_stats(top_n=None)
     }, indent=2))
 
 

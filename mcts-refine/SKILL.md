@@ -18,6 +18,44 @@ artifact content. The harness just hands you a path.
 
 The harness has NO internal loop and calls no model. You drive it.
 
+## Reporting discipline (user-facing output)
+
+While the search runs, the stats go to a log file — **`refine.md` in the
+search's working directory** — not into the chat.
+
+- **Per iteration, append exactly one stats line to `refine.md`**, lc0-
+  `info` style, built from the harness response's iteration progress +
+  `total_nodes` + `tree_max_depth` + `root_children` top-3 (moves ranked by
+  visits, with prior/Q):
+  `iter 37/100 · nodes 52 · maxdepth 6 · N(act_2)=18 Q=0.71 P=0.40 | N(act_1)=12 Q=0.65 P=0.30 | N(act_4)=5 Q=0.58 P=0.15 | ...`
+  One line per iteration, appended in order; `refine.md` is the run's
+  progress log. Create it at `init`, and at the end append the final summary
+  (ranked root moves with `visits`/`q_value`/`subtree_nodes`/`subtree_depth`
+  and the three delivered paths).
+- **Nothing goes to the chat during the loop.** Do not emit the stats line,
+  the shell commands you run (`python run_mcts.py step ...`), their JSON
+  output, the move batches you propose, priors or values you assign, files
+  you read or wrote, tool results, or any other intermediate evidence. All
+  of that is machine-to-machine; the harness JSON is for you to parse and
+  act on, `refine.md` is where the stats live. The user follows progress by
+  opening `refine.md`.
+- **Do not report on the work product** — the artifact's actual content
+  (draft text, code, diff excerpts, scores narrated as progress) — until the
+  search is over. While the budget is running, `refine.md` carries only the
+  stats lines; quoting, summarizing, or narrating artifact content mid-run
+  defeats the point of running the search.
+- **At the end** (`best`), append the final summary to `refine.md`: the
+  ranked root moves with `visits`/`q_value`/`subtree_nodes`/`subtree_depth`
+  (node count and depth per root move) and the winning concept. **Deliver
+  the top three concepts as `one`/`two`/`three`**, named appropriately to
+  the artifact: copy each ranked concept's `leaf_state_ref` next to the
+  original (same extension for files — `one.md`, `two.md`, `three.md` for a
+  markdown input; a whole directory copied as `one/`, `two/`, `three/` for
+  a directory artifact). `one` is the search's winner. **The original
+  artifact is never modified** — all refinement lives in the copies. Still
+  no raw JSON, and never paste artifact content into the chat; if the user
+  wants to read a result, they open the file or `refine.md`.
+
 ## The four MCTS concepts, mapped to refinement
 
 | MCTS term | In this skill | Where it goes |
@@ -196,10 +234,12 @@ finishing early.
      - `no_actionable_node`: terminal/depth-capped dead end; treat as
        exhausted and `step` again (selection will land elsewhere) — should be
        rare with `max_depth` unlimited.
-     Also surface progress every round: `iterations_done` /
-     `target_iterations` / `iterations_remaining`, `total_nodes`, and
-     `tree_max_depth` (deepest chain built so far, vs. this node's own
-     `depth`) — e.g. "iteration 37/100, max depth 6".
+      After each `step`/`propose`/`record` in the loop, append the single
+      per-iteration stats line to `refine.md` (per Reporting discipline):
+      `iterations_done`/`target_iterations`, `total_nodes`,
+      `tree_max_depth`, and the `root_children` top-3 readout. Nothing
+      else, to the log or the chat — no commands, no JSON, no content, no
+      evidence.
    - **As critic**: score the new state against the objective → `value`.
    - Write the edited artifact to disk yourself (a scratch file, or a full
      copy of the directory tree with your edit applied — your choice of
@@ -220,8 +260,10 @@ finishing early.
      back to ad hoc `--desc`/`--prior` (no `--action-id`) if you truly need to
      add a single move outside any batch — its prior is used as-is,
      unnormalized.
-     The response repeats `iterations_done`, `iterations_remaining`,
-     `target_reached`, `total_nodes`, and `tree_max_depth` — surface these.
+      The response repeats `iterations_done`, `iterations_remaining`,
+      `target_reached`, `total_nodes`, `tree_max_depth`, and the
+      `root_children` top-3 — that's the source for the next stats line in
+      `refine.md`. Stay silent otherwise.
    - If `target_reached` is `false`, go back to `step` and continue. Do not
      move on to `best` until it is `true`.
 
@@ -234,12 +276,22 @@ finishing early.
    strongest strategic directions, each as its own robust-child trajectory
    ranked by leaf visit count (tie-break on Q). For each: `rank`, `concept`
    (the first move's description), `final_q_value`/`final_visits`/`depth`,
-   `leaf_state_ref` (that concept's refined artifact on disk — read it
-   yourself or copy it where the user needs it), and the full `trajectory`
-   chain. Present the ranked concepts to the user — e.g. offer the top
-   concept as the result with the runner-up as an alternative. The output
-   also echoes final `iterations_done`/`target_iterations`, `total_nodes`,
-   and `tree_max_depth` as a confirmation the full search ran.
+   `subtree_nodes`/`subtree_depth` (size and depth of that root direction's
+   subtree — report these per root move in the final summary),
+   `leaf_state_ref` (that concept's refined artifact on disk), and the full
+   `trajectory` chain. The output also includes a complete `root_children`
+   list (all root moves, ranked by visits, with subtree stats).
+
+   **Deliver the results**: copy the top three concepts' `leaf_state_ref` to
+   `one`/`two`/`three`, named appropriately to the artifact kind —
+   `one.md`/`two.md`/`three.md` for a markdown file input (same extension as
+   the original), `one/`/`two/`/`three/` for a directory artifact — with
+   `one` = rank 1 (the winner). Append the final summary to `refine.md`
+   (ranked root moves with node counts and depths, plus the three delivered
+   paths); never paste artifact content into the chat, and leave the
+   original artifact unmodified. The output also echoes final
+   `iterations_done`/`target_iterations`, `total_nodes`, and
+   `tree_max_depth` as a confirmation the full search ran.
 
 ## Tuning knobs (in `engine.py`, optional)
 - `c_puct` (1.414): higher = more exploration of high-prior branches.

@@ -135,6 +135,70 @@ class JsonMCTSEngine:
             return 0
         return max(self.depth_of(nid) for nid in self.nodes)
 
+    def subtree_size(self, node_id: str) -> int:
+        """Total node count of the subtree rooted at node_id (inclusive)."""
+        total = 0
+        stack = [node_id]
+        while stack:
+            node = self.nodes.get(stack.pop())
+            if node is None:
+                continue
+            total += 1
+            stack.extend(node.children.values())
+        return total
+
+    def subtree_max_depth(self, node_id: str) -> int:
+        """Deepest absolute depth (root = 0) within the subtree rooted at node_id."""
+        best = self.depth_of(node_id)
+        stack = [(node_id, best)]
+        while stack:
+            nid, d = stack.pop()
+            node = self.nodes.get(nid)
+            if node is None:
+                continue
+            best = max(best, d)
+            for cid in node.children.values():
+                stack.append((cid, d + 1))
+        return best
+
+    def root_children_stats(self, top_n: Optional[int] = 3) -> List[Dict[str, Any]]:
+        """LC0-style policy readout over the root's candidate moves, ranked by
+        visit count (tie-break Q, then prior). Pure tree bookkeeping: stub
+        (unexpanded) actions report zero visits so the full candidate set and
+        its priors stay visible. top_n caps the returned list (None = all
+        root moves, as in the final 'best' report). No artifact content is
+        ever touched."""
+        root = self.nodes.get(self.root_id) if self.root_id else None
+        if root is None:
+            return []
+        entries = []
+        for aid, act in root.actions.items():
+            child_id = root.children.get(aid)
+            child = self.nodes.get(child_id) if child_id else None
+            entries.append({
+                "action_id": aid,
+                "desc": act.description,
+                "prior": act.prior,
+                "risk": act.risk,
+                "expanded": child is not None,
+                "child_id": child_id,
+                "visits": child.visit_count if child else 0,
+                "q_value": child.q_value if child else None,
+                "subtree_nodes": self.subtree_size(child_id) if child_id else 0,
+                "subtree_depth": self.subtree_max_depth(child_id) if child_id else 0,
+            })
+        entries.sort(
+            key=lambda e: (
+                e["visits"],
+                e["q_value"] if e["q_value"] is not None else float("-inf"),
+                e["prior"],
+            ),
+            reverse=True,
+        )
+        if top_n is not None:
+            entries = entries[:top_n]
+        return entries
+
     def add_actions(self, node: MCTSNode, moves: List[Dict[str, Any]]) -> Tuple[List[str], Optional[str]]:
         """Register a batch of candidate moves (description + prior + optional
         risk) on a node as unexpanded ("stub") actions — no child node/state/

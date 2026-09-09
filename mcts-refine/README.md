@@ -4,6 +4,32 @@ Monte Carlo Tree Search (MCTS) engine featuring **PUCT** (Polynomial Upper Confi
 
 The harness is intentionally **dumb**: it never opens or renders artifact content — it only copies artifact paths (files or directories) into its own cache and hands back references. The driving LLM agent reads/writes artifact content itself with its own tools; the Python only does tree bookkeeping.
 
+## Search stats on every call (lc0-style)
+
+Every command that changes or reads the tree (`init`, `step`, `propose`, `record`, `best`) includes a stats block alongside its own payload:
+
+```json
+{
+  "iterations_done": 37, "target_iterations": 100, "iterations_remaining": 63,
+  "total_nodes": 52, "tree_max_depth": 6,
+  "root_children": [
+    {"action_id": "act_2", "desc": "Add concrete benchmarks", "prior": 0.40, "risk": "bold",
+     "expanded": true, "child_id": "n_5", "visits": 18, "q_value": 0.71,
+     "subtree_nodes": 21, "subtree_depth": 5},
+    {"action_id": "act_1", "desc": "Simplify introduction", "prior": 0.30, "risk": "safe",
+     "expanded": true, "child_id": "n_2", "visits": 12, "q_value": 0.65,
+     "subtree_nodes": 14, "subtree_depth": 4},
+    {"action_id": "act_4", "desc": "Rewrite as an interactive FAQ", "prior": 0.15, "risk": "wild",
+     "expanded": false, "child_id": null, "visits": 0, "q_value": null,
+     "subtree_nodes": 0, "subtree_depth": 0}
+  ]
+}
+```
+
+`root_children` is the root's candidate moves ranked by **visit count** (tie-break Q, then prior), capped to the **top 3** during the search; unexpanded stubs appear with zero visits so the policy priors stay visible. In the final `best` output the cap is lifted to all root moves.
+
+During the search the agent emits nothing to the chat. Instead, each iteration appends one compact lc0-`info` stats line to **`refine.md`** in the search's working directory — the run's progress log, created at `init`, holding one stats line per iteration plus the final summary. No shell commands, no JSON dumps, no move batches, no artifact content, no other evidence in chat: the agent parses the harness JSON silently and logs only the stats lines. After the search completes, the **top three concepts are saved as `one`, `two`, `three`** — named appropriately to the artifact (e.g. `one.md`/`two.md`/`three.md` for a markdown input, `one/`/`two/`/`three/` for a directory), `one` being the winner — and the **original artifact is left unmodified**. `refine.md` gets the final ranked summary (root moves with visits, Q, node counts, depths, and the three delivered paths); the chat carries nothing — read the log, read the files.
+
 ## Architecture
 
 - **`skill.json`**: OpenCode skill definition with metadata and tool schema.
@@ -84,6 +110,8 @@ The harness is intentionally **dumb**: it never opens or renders artifact conten
    - `rank` — 1 is the strongest concept
    - `concept` — the first move's description
    - `final_q_value` / `final_visits` / `depth` — leaf stats behind that ranking
+   - `subtree_nodes` / `subtree_depth` — the node count and the deepest chain
+     under that root move (report these per root move in the final summary)
    - `leaf_state_ref` — path to that concept's refined artifact on disk
    - `trajectory` — the full node/action chain from ROOT to the leaf
 
@@ -91,8 +119,38 @@ The harness is intentionally **dumb**: it never opens or renders artifact conten
    search's total attention this concept's best line attracted), tie-broken by
    Q-value. Visit count is preferred over raw Q because a single expansion
    with one generous critic score should not outrank a direction the search
-   kept returning to. Read each `leaf_state_ref` with your own tools and pick
-   the winner — or present several to the user as alternatives.
+   kept returning to. The output also lists **all** root moves (uncapped
+   `root_children`, ranked by visits with subtree stats). Deliver the top
+   three concepts as `one`/`two`/`three`, named appropriately to the
+   artifact (`one.md`… for a file with its original extension, `one/`… for a
+   directory), `one` = the winner, and leave the original artifact
+   unmodified. Append the final ranked summary to `refine.md`; the chat
+   carries nothing — never pasted content.
+
+## Prompt options
+
+Everything a user (or the driving prompt) can tune, and where it lands:
+
+| Option | Type / range | Default | Meaning |
+| ------ | ------------ | ------- | ------- |
+| **Artifact** | file or directory path | required | The thing to refine, passed as a path (`--state-file` at init; `--new-state-path` at record). Inline text is never accepted — write it to a scratch file first. |
+| **Objective / rubric** | free text | required | What the critic scores every state against; sub-criteria are averaged into one `[0,1]` value. |
+| **Iterations** | integer | `100` | Total expansion budget (`--iterations`). Each realized move = one iteration; proposing moves is free. Keep looping until `iterations_remaining` hits 0. |
+| **Batch size** | integer | `4` | Target moves per batch (`--batch-size`), echoed as `target_batch_size`. A reminder only — the agent generates each batch. |
+| **Wildness** | float `[0,1]` | `0.25` | Target fraction of each batch tagged `"risk":"wild"` (`--wildness`), echoed as `target_wildness`. The harness warns when a 3+ move batch has zero wild entries while this is > 0. |
+| **Risk tags** | `safe` / `bold` / `wild` | `bold` | Per-move exploration character. `safe` = incremental, low blast radius; `bold` = real structural change; `wild` = long-shot (break the format, invert an assumption). |
+| **Priors** | floats summing to 1.0 | — | Policy distribution over sibling moves; normalized-and-warned if they don't sum to 1.0. |
+| **Critic values** | float `[0,1]` | — | Post-hoc rubric score per recorded state (`--value`). Independent of priors; consistency across the run is what keeps Q-values meaningful. |
+| **Top concepts** | integer | `3` | How many root-level directions `best` returns (`--top`), each as a robust-child trajectory. |
+| **c_puct** | float | `1.414` | PUCT exploration constant (in `engine.py`): higher favors high-prior/unvisited branches, lower favors exploitation of proven lines. |
+| **max_depth** | integer | `0` (unlimited) | Longest single refinement chain (in `engine.py`); set a positive cap only if deep chains are undesirable. |
+| **widening_c / widening_alpha** | floats | `1.5` / `0.5` | Legacy progressive-widening knobs from the one-move-at-a-time design; unused by the current batch-based `select()`, kept only for backward-compatible tree loading. |
+| **Reporting style** | stats log | `refine.md` | The chat stays empty during the loop; each iteration appends one lc0-style stats line to `refine.md`. At the end, the top three concepts are saved as `one`/`two`/`three` (named to the artifact), the original stays unmodified, and `refine.md` gets the ranked root moves with node counts and depths plus the three paths. |
+| **Force restart** | flag | off | `init --force-restart` deliberately discards the existing tree; never used to "continue" — call `step` instead. |
+
+Prompting examples that set these knobs live in the Worked Examples below
+(e.g. "40 iterations, medium exploration" ≈ wildness 0.25–0.35; "low
+exploration, no speculative rewrites" ≈ wildness ≤ 0.15).
 
 ## Worked Examples
 
