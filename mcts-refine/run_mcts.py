@@ -81,6 +81,21 @@ def cmd_init(args):
         TREE_FILE.unlink()
         if ARTIFACTS_DIR.exists():
             shutil.rmtree(ARTIFACTS_DIR)
+    elif ARTIFACTS_DIR.exists() and any(ARTIFACTS_DIR.iterdir()):
+        if not args.force_restart:
+            existing = sorted(p.name for p in ARTIFACTS_DIR.iterdir())
+            raise ValueError(
+                "No .mcts_tree.json found in this directory, but .mcts_artifacts/ already contains "
+                f"{len(existing)} artifact file(s)/dir(s) (e.g. {existing[0]}..{existing[-1]}). This "
+                "looks like the tree file from a prior search went missing (wrong working directory, "
+                "manual deletion, etc.) while its artifacts survived — running init here would silently "
+                "start a brand-new root without ever touching those old artifacts, orphaning them and "
+                "losing all prior visit/Q-value history with no error. Do NOT re-init to 'fix' this. "
+                "Investigate first (check you're in the right working directory; look for the tree file "
+                "elsewhere). Only pass --force-restart if you are intentionally and explicitly discarding "
+                "ALL prior refinement work — this will also delete the existing .mcts_artifacts/ directory."
+            )
+        shutil.rmtree(ARTIFACTS_DIR)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     engine = JsonMCTSEngine(

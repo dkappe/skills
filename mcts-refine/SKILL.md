@@ -88,11 +88,23 @@ search's working directory** — not into the chat.
   `info` style, built from the harness response's iteration progress +
   `total_nodes` + `tree_max_depth` + `root_children` top-3 (moves ranked by
   visits, with prior/Q):
-  `iter 37/100 · nodes 52 · maxdepth 6 · N(act_2)=18 Q=0.71 P=0.40 | N(act_1)=12 Q=0.65 P=0.30 | N(act_4)=5 Q=0.58 P=0.15 | ...`
+  `iter 37/100 · nodes 52 · maxdepth 6 · N(act_2)=18 Q=0.71 P=0.40 | N(act_1)=12 Q=0.65 P=0.30 | N(act_4)=5 Q=n/a P=0.15 | ...`
+  **Read `Q` straight off each `root_children` entry's `q_value` field —
+  never substitute, compute, or default it from `prior`.** An unexpanded
+  action (`expanded: false`, `visits: 0`) has `q_value: null` from the
+  harness; render that literally as `Q=n/a` in the line, not `Q=0.00` and
+  *especially* not the action's own `prior` value — printing the prior into
+  the `Q` slot for a stub action is a formatting bug that silently claims an
+  unvisited branch already has a backpropagated score (it doesn't; nothing
+  has been evaluated there yet), and reads exactly like the search
+  discovered a promising line when in fact no state has been generated at
+  all. `P` is always the `prior` field, `Q` is always the `q_value` field —
+  the two must never be conflated or interchanged, expanded or not.
   One line per iteration, appended in order; `refine.md` is the run's
   progress log. Create it at `init`, and at the end append the final summary
   (ranked root moves with `visits`/`q_value`/`subtree_nodes`/`subtree_depth`
-  and the three delivered paths).
+  and the three delivered paths — again, `q_value: null` there renders as
+  `n/a`, never as the prior).
 - **Nothing goes to the chat during the loop.** Do not emit the stats line,
   the shell commands you run (`python run_mcts.py step ...`), their JSON
   output, the move batches you propose, priors or values you assign, files
@@ -356,6 +368,38 @@ finishing early.
       `refine.md`. Stay silent otherwise.
    - If `target_reached` is `false`, go back to `step` and continue. Do not
      move on to `best` until it is `true`.
+
+### On-demand: "best so far" snapshot (mid-run, optional)
+
+If the user asks what the current best looks like *before* the budget is
+exhausted (e.g. "show me the best so far", "update best.md"), you don't have
+to wait for `target_reached`. `best` only reads tree bookkeeping, so it works
+identically on a partial run — it just ranks whatever visit counts exist so
+far:
+
+```bash
+python run_mcts.py best --top 1
+```
+
+Copy the **rank-1** concept's `leaf_state_ref` to a single file named
+`best.<ext>` (matching the artifact's extension/kind — `best.md` for a
+markdown file, `best/` for a directory artifact), placed next to the original
+artifact. Treat it as a live, overwritable snapshot, not a delivery:
+- **Overwrite `best.<ext>` in place** each time this is requested — one
+  "current best" file per search, always the latest snapshot. Don't
+  accumulate `best_2.md`, `best_3.md`, etc.
+- This does **not** end the search: don't treat it as `target_reached`,
+  don't run the cleanup step, don't touch/delete `.mcts_tree.json` or
+  `.mcts_artifacts/`, and don't produce `one`/`two`/`three` yet — those are
+  the final-only deliverables from step 3 below. The loop resumes exactly
+  where it left off on the next `step` call.
+- Unlike the silent automatic stats line, this is a direct response to an
+  explicit ask — a short chat confirmation (which concept, its
+  visits/Q so far, where the file landed) is fine here.
+- Say plainly that this reflects the search *so far* on an unfinished tree
+  and may change as more iterations run, since ranking is by visit count on
+  a still-growing tree — it is not the final answer `best` will give once
+  `target_reached` is true.
 
 3. **Extract** the winning trajectory (walks by max visit count) only after
    the full budget has been used:

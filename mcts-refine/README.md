@@ -96,7 +96,18 @@ During the search the agent emits nothing to the chat. Instead, each iteration a
    (matching the root artifact's kind) — there is no inline-text option; the
    harness just copies what you point it at.
 
-4. **Extract the top concepts** (after the full iteration budget has been run
+4. **(Optional, mid-run) Snapshot the current best**: `best` only reads tree
+   bookkeeping, so it can be run before the budget is exhausted too — e.g. if
+   asked "what's the best so far" or "update best.md". Run
+   `python run_mcts.py best --top 1` and copy the rank-1 concept's
+   `leaf_state_ref` to a single overwritable `best.<ext>` file (or `best/`
+   for a directory artifact) next to the original. This does not end the
+   search, doesn't touch `.mcts_tree.json`/`.mcts_artifacts/`, and isn't the
+   final `one`/`two`/`three` delivery — the loop just resumes on the next
+   `step`. Note in your reply that it reflects the search so far and may
+   change with more iterations.
+
+5. **Extract the top concepts** (after the full iteration budget has been run
    — each `step`/`record` call reports `iterations_done`,
    `iterations_remaining`, `total_nodes`, and `tree_max_depth` so progress is
    trackable):
