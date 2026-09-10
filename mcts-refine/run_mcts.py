@@ -50,6 +50,15 @@ def stats_block(engine: JsonMCTSEngine) -> dict:
     Pure tree bookkeeping from .mcts_tree.json — the harness never reads
     artifact content."""
     return {
+        "_protocol_reminder": (
+            "You are driving the mcts-refine skill (see SKILL.md) — chat stays "
+            "silent during the loop; log one stats line per iteration to "
+            "refine.md instead. `step` returning the root (n_0) as target_node_id "
+            "is normal PUCT exploration, not a dead end — treat it like any other "
+            "ready_for_moves/ready_for_eval response. Only call `best` once "
+            "target_reached is true, or if the user explicitly asks for a "
+            "mid-run snapshot."
+        ),
         "iterations_done": engine.iterations_done(),
         "target_iterations": engine.target_iterations,
         "iterations_remaining": max(0, engine.target_iterations - engine.iterations_done()),

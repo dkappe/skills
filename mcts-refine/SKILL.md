@@ -336,6 +336,20 @@ finishing early.
      - `no_actionable_node`: terminal/depth-capped dead end; treat as
        exhausted and `step` again (selection will land elsewhere) — should be
        rare with `max_depth` unlimited.
+     - **`target_node_id` coming back as the root (`n_0`), including on a
+       later iteration after the tree has grown, is normal PUCT behavior,
+       not a signal to stop or fetch `best`.** It just means the exploration
+       term `c_puct * prior * √N_parent/(1+N_child)` currently favors an
+       unvisited/under-visited root sibling over the already-expanded
+       children's exploitation term — the search revisiting the root to try
+       another top-level direction is exactly what PUCT is supposed to do.
+       Treat it like any other `ready_for_moves`/`ready_for_eval` response:
+       read `state_ref` (the root's state) and realize or propose the named
+       action, same as at any other node. `best` is a user-requested,
+       explicitly mid-run/non-terminating snapshot (see "On-demand: best so
+       far" below) — nothing in the loop should ever call it automatically,
+       and landing back on the root is not a dead end that justifies calling
+       it or ending the search early.
       After each `step`/`propose`/`record` in the loop, append the single
       per-iteration stats line to `refine.md` (per Reporting discipline):
       `iterations_done`/`target_iterations`, `total_nodes`,
