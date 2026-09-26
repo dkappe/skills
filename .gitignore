@@ -99,4 +99,6 @@ temp/
 # --- opencode ---
 .opencode/
 opencode.json
+.mnemosyne/
+
 

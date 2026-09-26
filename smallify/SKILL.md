@@ -26,9 +26,10 @@ These override everything else in this file. They are stated here, at the top, b
 1. **The ticket file is the only artifact.** Every decision, finding, and open question is written into the ticket file on disk as it is made — never only in chat. The skill never produces findings summaries, status reports, or handoff documents, in chat or as side files.
 2. **Seed before investigating.** The ticket file is rewritten into the output-format skeleton *before any codebase reading begins* (step 2). A run that investigates while the ticket file is still the original stub has already failed, however good its findings.
 3. **Write each decision into the ticket as it's reached**, not in a batch at the end.
-4. **Never write findings or status content in chat.** If you catch yourself drafting a findings-so-far block — in chat or as a side file — stop and move that content into the ticket instead.
+4. **Never write findings or status content in chat.** If you catch yourself drafting a findings-so-far block — in chat or as a side file — stop and move that content into the ticket instead. The one sanctioned chat content is a question round (step 3), and its questions are mirrored into the ticket's `## Open questions` section before you ask.
 5. **An unfinished run marks itself in the ticket** (`## Smallify status: incomplete — steps N–9 remaining`, step 9) and gets at most one chat line pointing at the file.
 6. **The small model writes the code; the ticket only hints.** The ticket may contain identifiers, paths, commands, literal values, and plain-language algorithm hints. It may not contain code the executor could paste — no function bodies, no statements, no fenced code blocks except shell commands. The whole point of smallify is to offload code generation to the small model; a ticket full of code means the expensive model did the cheap model's job. See "Code-hint budget" in step 5.
+7. **Owner decisions are asked, not guessed.** Architecture forks, requirement gaps, and acceptance bounds go to the user as a question round with options, trade-offs, and a recommendation (step 3). Mechanical calls are never asked.
 
 ## Process
 
@@ -53,18 +54,47 @@ Never let an ambiguous instruction pass through to the small model — it will g
 
 **Self-resolve the mechanical calls:** file placement, names of new files/functions, which existing helper to reuse, purely internal constants, anything where every reasonable choice is equally fine. Pick one, pin it, record it as an Assumption. Don't spend user attention on these.
 
-**Ask the user** — batched, once, at the end of the first investigation pass — when the choice belongs to the ticket owner, not to you:
+**Ask the user** when the choice belongs to the ticket owner, not to you:
 - the choice forks the design: two materially different architectures are both reasonable;
+- a requirement is missing or ambiguous: the ticket doesn't say what should happen in a case the code will have to handle;
 - it sets an acceptance criterion: a tolerance, bound, or threshold that decides pass/fail for the whole ticket (this includes the tolerances and bounds themselves — "is ±0.005 right?" is a design fork only the ticket owner can answer);
 - it touches user-visible behavior or a public interface;
 - your preferred reading contradicts, narrows, or extends what the ticket literally says;
-- a wrong guess would be silent and structural (the probe decision tree in "Empirical verification" applies here too).
+- a wrong guess would be silent and structural (the probe decision tree in "Empirical verification" applies here too);
+- investigation shows the ticket is much bigger than it reads (scope — see "Things to watch for").
 
-Ask as one numbered list, each item with your recommended answer and what you'll fall back to if unanswered. Silence or deflection means the recommended answer becomes an Assumption — in pin-and-escalate form — never a silent decision. Fold the probe-authorization request (see "Empirical verification") into this same ask: one user interaction, not several, and not a drip-feed of one question per discovery.
+If a fact can be settled from the code, docs, config, or git history, settle it yourself — questions are for *choices*, not for facts you could have read.
 
-**If the turn must end before the answer arrives** (user away, context dying, session ending), do not leave the question open: pin-and-escalate immediately — the concrete guess as an Assumption, the plan check that fails loudly if the guess is wrong, and the mechanical escalation rule (who re-runs smallify, what evidence triggers the change). An undecided bound, tolerance, or design choice at end of turn is a failed run. The only valid endings are: asked (batched), pinned (Assumption), or escalated — never deferred.
+#### Question rounds (grill-style)
 
-**Decisions made during investigation are not done until they're in the plan.** Every choice you reach while reading the codebase — which helper to call, which mapping route to use, what numeric tolerance applies, what format data crosses a language or process boundary in — must appear in the rewritten ticket as a pinned fact or an Assumption. A summary "of what was learned" that lives outside the ticket is lost the moment the session ends; the ticket is the only artifact that reaches the small model. Corollary: the skill is not finished when the investigation is finished — it is finished when the ticket is rewritten (step 9). Do not stop after investigation to report findings and wait; carry the decisions straight into the rewrite in the same session. Only pause before rewriting for the single batched ask described above — and if you asked nothing, don't pause at all.
+Treat the open choices as a **design tree**: some decisions only make sense once a parent decision is settled (e.g. "which cache eviction policy" depends on "cache in-process or in Redis"). Ask in rounds:
+
+1. **Map the tree** after the first investigation pass. List every owner decision and what it depends on.
+2. **Ask only the frontier** — decisions whose parents are already settled. Never ask a question in the same round as the question it depends on; its options would be guesses.
+3. **Batch the whole frontier into one round.** No drip-feed of one question per discovery. Typical round: 2–5 questions. Fold any probe-authorization request (see "Empirical verification") into the first round.
+4. **Before sending a round, write its questions into the ticket** under `## Open questions`, each with its recommended default. If the session dies while waiting, the next run finds them there.
+5. **When answers arrive**, write each one into the ticket immediately as a pinned fact (in the relevant step or in Assumptions, tagged `(owner decision, Q<N>)`), remove it from Open questions, then recompute the frontier. Children of an answered question may now be askable, or may have vanished.
+6. **Repeat until the frontier is empty**, then continue straight into the rewrite. If you need more than 3 rounds, the ticket is under-specified: say so in the next round and offer to smallify only the settled part.
+
+**Question format.** Every question follows this shape, so the user can answer with a letter:
+
+    ❓ Q<N> — <short title>
+    Context: <1–3 sentences: what you found, naming files/identifiers, and why it forces a choice>
+    Options:
+      A. <option> — <what it means for the plan; main trade-off>
+      B. <option> — <what it means for the plan; main trade-off>
+      [C./D. only if genuinely distinct]
+    ➡️ Recommendation: <letter> — <one or two sentences of reasoning grounded in what you read>
+    If unanswered: <letter> is pinned as an Assumption; <the plan check that fails loudly if it's wrong>
+    Unblocks: <which steps, and which later questions, depend on this>
+
+Options must be concrete and mutually exclusive — each one something the plan could actually be written around. Don't pad with straw-man options to make the recommendation look good; two real options beat four fake ones. Numeric bounds get a concrete recommended number, not a range. If the environment offers a structured multiple-choice question tool, use it for the options and keep Context and Recommendation in the question text.
+
+Let the user answer compactly: "Q1 B, Q2 recommended, Q3 A but with X" is a complete answer. "Go with your recommendations" accepts every recommendation in the round. Silence or deflection means each recommendation becomes an Assumption in pin-and-escalate form — never a silent decision. An answer that invalidates a previous answer reopens that branch of the tree; update the ticket before asking the next round.
+
+**If the turn must end before the answer arrives** (user away, context dying, session ending), do not leave the question open: pin-and-escalate immediately — the concrete guess as an Assumption, the plan check that fails loudly if the guess is wrong, and the mechanical escalation rule (who re-runs smallify, what evidence triggers the change). An undecided bound, tolerance, or design choice at end of turn is a failed run. The only valid endings are: asked (a question round, mirrored in `## Open questions`), pinned (Assumption), or escalated — never deferred. A resumed run that finds `## Open questions` with no answers in chat asks them again once; if still unanswered, it pins the recommended defaults.
+
+**Decisions made during investigation are not done until they're in the plan.** Every choice you reach while reading the codebase — which helper to call, which mapping route to use, what numeric tolerance applies, what format data crosses a language or process boundary in — must appear in the rewritten ticket as a pinned fact or an Assumption. A summary "of what was learned" that lives outside the ticket is lost the moment the session ends; the ticket is the only artifact that reaches the small model. Corollary: the skill is not finished when the investigation is finished — it is finished when the ticket is rewritten (step 9). Do not stop after investigation to report findings and wait; carry the decisions straight into the rewrite in the same session. Only pause for the question rounds described above — and if you have nothing to ask, don't pause at all.
 
 **Write decisions into the ticket file as you reach them, incrementally — not in one batch at the end.** At every moment, the ticket on disk contains everything decided so far. The batch-at-the-end rewrite is how work evaporates when a session dies mid-investigation.
 
@@ -145,8 +175,11 @@ labels, ticket id, etc. — reproduced exactly. Omit this whole block if the tic
 ## Goal
 [1-2 sentence restatement of what "done" means]
 
+## Open questions
+[Only while a question round is pending: each question in the step 3 format, with its recommended default. Must be empty/removed in a finished ticket.]
+
 ## Assumptions
-[Any interpretation calls you made, stated plainly. Omit if none.]
+[Interpretation calls you made, stated plainly, and owner decisions tagged `(owner decision, Q<N>)`. Omit if none.]
 
 ## Files touched
 - CREATE: path/to/new_file.ts
@@ -180,6 +213,7 @@ The run is complete only when all of the following are true. Check them before e
 - [ ] If the run ended incomplete, the ticket file contains the `## Smallify status: incomplete — steps N–9 remaining` line from step 9; if the run is complete, that line is absent.
 - [ ] Every file path, function/identifier name, command, and cross-component data format in the plan is exact and final. Check: search the ticket for "e.g.", "TBD", "to be decided at execution time", and placeholder names — none remain.
 - [ ] Every numeric comparison bound is a concrete number, stated in the plan.
+- [ ] Every owner decision (architecture fork, requirement gap, acceptance bound, public behavior) was either answered by the user or pinned from its recommendation as an Assumption, and the finished ticket has no `## Open questions` section. No mechanical call was sent to the user.
 - [ ] Ticket metadata was carried forward verbatim (or the ticket had none and none was added).
 - [ ] No code was written, prototyped, or implemented anywhere, and no new code was executed — investigation was read-only. The only exceptions: (a) a run of the project's existing test suite under step 2's conditional clause, or (b) user-authorized probes, in which case this box instead requires full compliance with the "Empirical verification" rules, including the disclosure section.
 - [ ] If empirical verification was authorized and used: authorization was requested first, as one batched enumeration of every empirical question; probe artifacts are saved as re-runnable files in scratch (not left as transcript-only heredocs); the ticket contains the disclosure section mapping each question → probe → pinned fact. If it was not authorized, none was done — asking-first was not skipped, and no probe ran on the model's own judgment.
@@ -201,7 +235,7 @@ The read-only rule has one exception. The user may explicitly authorize running 
 
 Before writing any probe, state in one sentence: which decision it unblocks, and what the fallback costs. If the fallback is "a verification step fails → re-run smallify," the fallback is cheaper.
 
-**Batched authorization.** Probe authorization is requested as part of step 3's batched ask, not separately: enumerate every open empirical question, what each unblocks, and the fallback for each. One "yes" covers exactly the enumerated list; anything discovered later is a new explicit ask or falls back to read-only. Silence or deflection is no. If the user says no or doesn't answer, pin a concrete initial bound plus a mechanical escalation rule (per "Things to watch for") and let the executor's verification step surface mismatches. If the turn must end before the user answers, do the same immediately — an open empirical question at end of turn follows pin-and-escalate, never deferral.
+**Batched authorization.** Probe authorization is requested as part of step 3's first question round, not separately: enumerate every open empirical question, what each unblocks, and the fallback for each. One "yes" covers exactly the enumerated list; anything discovered later is a new explicit ask or falls back to read-only. Silence or deflection is no. If the user says no or doesn't answer, pin a concrete initial bound plus a mechanical escalation rule (per "Things to watch for") and let the executor's verification step surface mismatches. If the turn must end before the user answers, do the same immediately — an open empirical question at end of turn follows pin-and-escalate, never deferral.
 
 When authorized, the protocol is:
 
@@ -280,7 +314,7 @@ The commands you attach as verification should match the project's own ecosystem
 
 ## Things to watch for
 
-- **This skill's rules take precedence over repo precedent.** Earlier tickets in the same repo may have been produced under different conventions (e.g. shipping verbatim pre-compiled code, or claiming "verified during smallification"). Those conventions do not amend this skill. If following this skill would contradict how sibling tickets were produced, do not silently resolve the conflict: either ask the user (step 3's batched ask), or follow this skill and note the divergence in an Assumption. Never cite a sibling ticket's style as authorization for anything this skill forbids.
+- **This skill's rules take precedence over repo precedent.** Earlier tickets in the same repo may have been produced under different conventions (e.g. shipping verbatim pre-compiled code, or claiming "verified during smallification"). Those conventions do not amend this skill. If following this skill would contradict how sibling tickets were produced, do not silently resolve the conflict: either ask the user (in a step 3 question round), or follow this skill and note the divergence in an Assumption. Never cite a sibling ticket's style as authorization for anything this skill forbids.
 - **Preserve ticket metadata, don't reinterpret it.** Whatever status/priority/blocker/assignee fields the original ticket had, copy them forward as-is. Don't mark something "blocked" or change its status based on your own read of the work — that's not smallify's call to make.
 - **Don't invent tracking fields.** If the ticket had no metadata block, the rewritten ticket gets none either.
 - **Describe the change, don't write it.** Name the exact file and anchor, and state the required behavior precisely enough that only one *behavior* is reasonable — but leave the actual code to the model executing the plan. Names, anchors, "reuse X", literal values, and plain-language algorithm hints are allowed; bodies, statements, pseudocode-that-compiles, and code blocks are not (see "Code-hint budget").
@@ -297,4 +331,4 @@ The commands you attach as verification should match the project's own ecosystem
 - **No deferred decisions or adjustable tolerances.** Every bound, threshold, or precision in the plan is one concrete number chosen by you, stated in the plan. Never write "the exact bound will be finalized based on the first run" — that delegates a judgment call to the small model. If a bound may need revisiting after real data, state the concrete initial bound plus a mechanical escalation rule (who re-runs smallify, what evidence triggers the change), not an open choice for the executor.
 - **Specify cross-language/cross-process data exchange exactly.** Wherever the plan has one program emitting data for another to consume (C binary → Python checker, service → client, tool → script), the plan must pin the exact format: line format, field order, and print precision. Float precision is the classic silent failure — default `printf` rounding can create comparison failures that look like numeric bugs. Name the exact conversion (e.g. a shortest-round-trip formatting routine, or a literal format string like `%.17g`) rather than "print the values" — as a spec, not as the print statement itself.
 - **One route per mapping, named.** When more than one existing mechanism could accomplish a mapping (two helper functions, two data sources), the plan must name exactly one — with the reason the other was rejected — so the small model never chooses between them.
-- **Watch for scope creep.** If investigating the codebase reveals the ticket is bigger than it reads, say so up front rather than silently producing a sprawling plan — flag it to the user before smallifying the whole thing.
+- **Watch for scope creep.** If investigating the codebase reveals the ticket is bigger than it reads, say so up front rather than silently producing a sprawling plan — flag it to the user as a question in the first round (options such as: smallify all of it, split into tickets, smallify only part X) before smallifying the whole thing.
