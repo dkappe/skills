@@ -3,4 +3,3 @@ interface:
   short_description: "Make a ticket better for a small model"
 policy:
   allow_implicit_invocation: false
-  

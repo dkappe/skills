@@ -1,11 +1,87 @@
 import argparse
+import difflib
+import filecmp
 import json
+import os
 import shutil
 from pathlib import Path
 from engine import JsonMCTSEngine, MCTSNode, Action
 
 TREE_FILE = Path(".mcts_tree.json")
 ARTIFACTS_DIR = Path(".mcts_artifacts")
+LOCK_FILE = Path(".mcts_tree.lock")
+
+
+class TreeLock:
+    """Advisory single-writer lock so a model that (against instructions)
+    fires concurrent step/propose/record/init calls at the same tree gets a
+    loud, immediate error instead of silent corruption. Not a substitute for
+    the 'don't parallelize' rule in SKILL.md — a hard backstop for it."""
+
+    def __enter__(self):
+        if LOCK_FILE.exists():
+            held_by = LOCK_FILE.read_text().strip()
+            raise ValueError(
+                f"Another mcts-refine operation is already in-flight in this directory "
+                f"(lock held, pid={held_by!r}). The search is strictly sequential over one "
+                "tree: do not call step/propose/record/init concurrently (parallel tool "
+                "calls, background processes, xargs -P, etc.). Wait for the other call to "
+                "finish and try again. If you are certain no other call is actually running "
+                f"(e.g. a previous run crashed), remove {LOCK_FILE} by hand first."
+            )
+        LOCK_FILE.write_text(str(os.getpid()))
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            LOCK_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        return False
+
+
+def compute_change_fraction(old_path: Path, new_path: Path) -> float:
+    """Best-effort SIZE of the delta between two artifact states, in [0, 1].
+
+    This is a narrow, explicit exception to 'the harness never reads
+    artifact content': it reads bytes/lines only to measure *how much*
+    changed (a line-diff ratio for files, a changed-file ratio for
+    directories) and never interprets, logs, or returns the content itself.
+    Used purely to enforce 'one small, coherent move' as a hard check
+    instead of a prompt-only request.
+    """
+    old_is_dir, new_is_dir = old_path.is_dir(), new_path.is_dir()
+    if old_is_dir or new_is_dir:
+        if old_is_dir != new_is_dir:
+            return 1.0
+        old_files = {p.relative_to(old_path) for p in old_path.rglob("*") if p.is_file()}
+        new_files = {p.relative_to(new_path) for p in new_path.rglob("*") if p.is_file()}
+        all_files = old_files | new_files
+        if not all_files:
+            return 0.0
+        changed = 0
+        for rel in all_files:
+            if rel not in old_files or rel not in new_files:
+                changed += 1
+                continue
+            try:
+                if not filecmp.cmp(old_path / rel, new_path / rel, shallow=False):
+                    changed += 1
+            except OSError:
+                changed += 1
+        return changed / len(all_files)
+
+    try:
+        old_lines = old_path.read_text(errors="ignore").splitlines()
+    except OSError:
+        old_lines = []
+    try:
+        new_lines = new_path.read_text(errors="ignore").splitlines()
+    except OSError:
+        new_lines = []
+    if not old_lines and not new_lines:
+        return 0.0
+    return 1.0 - difflib.SequenceMatcher(None, old_lines, new_lines).ratio()
 
 
 def get_engine() -> JsonMCTSEngine:
@@ -50,15 +126,7 @@ def stats_block(engine: JsonMCTSEngine) -> dict:
     Pure tree bookkeeping from .mcts_tree.json — the harness never reads
     artifact content."""
     return {
-        "_protocol_reminder": (
-            "You are driving the mcts-refine skill (see SKILL.md) — chat stays "
-            "silent during the loop; log one stats line per iteration to "
-            "refine.md instead. `step` returning the root (n_0) as target_node_id "
-            "is normal PUCT exploration, not a dead end — treat it like any other "
-            "ready_for_moves/ready_for_eval response. Only call `best` once "
-            "target_reached is true, or if the user explicitly asks for a "
-            "mid-run snapshot."
-        ),
+        "note": "mcts-refine; see SKILL.md. Unsure of state (e.g. after compaction)? Run 'status', not 'init'.",
         "iterations_done": engine.iterations_done(),
         "target_iterations": engine.target_iterations,
         "iterations_remaining": max(0, engine.target_iterations - engine.iterations_done()),
@@ -76,22 +144,60 @@ def cmd_init(args):
         )
 
     if TREE_FILE.exists():
-        if not args.force_restart:
+        existing = json.loads(TREE_FILE.read_text())
+        node_count = len(existing["nodes"])
+        root_id = existing.get("root_id")
+
+        if args.force_restart is None:
+            root_state_ref = Path(existing["nodes"][root_id]["state_ref"]) if root_id else None
+            same_artifact = (
+                root_state_ref is not None
+                and root_state_ref.exists()
+                and Path(args.state_file).exists()
+                and compute_change_fraction(Path(args.state_file), root_state_ref) == 0.0
+            )
+            if same_artifact:
+                # Auto-resume: this looks like the same search calling init
+                # again (e.g. a model that forgot, post-compaction, that a
+                # tree already exists here). Never wipe on a guess — just
+                # hand back the current status, same shape 'step' would.
+                engine = get_engine()
+                print(json.dumps({
+                    "status": "resumed_existing_tree",
+                    "message": (
+                        f"A tree already exists here with the same root artifact ({node_count} "
+                        "node(s) so far). Nothing was created or deleted. Call 'step' to continue."
+                    ),
+                    "root_id": engine.root_id,
+                    **stats_block(engine),
+                }))
+                return
             raise ValueError(
-                "A search tree already exists in this directory (.mcts_tree.json present, "
-                f"root {json.loads(TREE_FILE.read_text()).get('root_id')} of "
-                f"{len(json.loads(TREE_FILE.read_text())['nodes'])} node(s)). Do NOT re-init to "
-                "start a second search or create another root — that discards the existing tree "
-                "and its refinement history. Continue the current search instead: call 'step' to "
-                "select a node/move and work from there. Only pass --force-restart if you are "
-                "intentionally and explicitly discarding ALL prior refinement work to start over "
-                "from scratch."
+                f"A search tree already exists in this directory (.mcts_tree.json present, "
+                f"root {root_id} of {node_count} node(s)), and --state-file does not match the "
+                "existing root's artifact byte-for-byte. Do NOT re-init to start a second search "
+                "or create another root — that discards the existing tree and its refinement "
+                "history. Run 'status' to inspect what's here, and 'step' to continue the current "
+                "search. Only pass --force-restart <node_count> (the exact node count above, as "
+                "proof you inspected the existing tree rather than guessing) if you are "
+                "intentionally and explicitly discarding ALL prior refinement work to start over."
+            )
+
+        if args.force_restart != node_count:
+            raise ValueError(
+                f"--force-restart {args.force_restart} does not match this tree's actual node "
+                f"count ({node_count}). --force-restart must be passed the exact current node "
+                "count (from 'status' or the error you just saw) as explicit proof you looked "
+                "before discarding — a mismatched/guessed value is refused rather than silently "
+                "corrected, precisely to stop a confused (e.g. post-compaction) restart from "
+                f"wiping {node_count} node(s) of prior work by accident. Re-run 'status' to get "
+                "the true count, then pass --force-restart <that number> only if you really mean it."
             )
         TREE_FILE.unlink()
         if ARTIFACTS_DIR.exists():
             shutil.rmtree(ARTIFACTS_DIR)
     elif ARTIFACTS_DIR.exists() and any(ARTIFACTS_DIR.iterdir()):
-        if not args.force_restart:
+        if args.force_restart is None:
             existing = sorted(p.name for p in ARTIFACTS_DIR.iterdir())
             raise ValueError(
                 "No .mcts_tree.json found in this directory, but .mcts_artifacts/ already contains "
@@ -101,8 +207,9 @@ def cmd_init(args):
                 "start a brand-new root without ever touching those old artifacts, orphaning them and "
                 "losing all prior visit/Q-value history with no error. Do NOT re-init to 'fix' this. "
                 "Investigate first (check you're in the right working directory; look for the tree file "
-                "elsewhere). Only pass --force-restart if you are intentionally and explicitly discarding "
-                "ALL prior refinement work — this will also delete the existing .mcts_artifacts/ directory."
+                "elsewhere). Only pass --force-restart 0 if you are intentionally and explicitly "
+                "discarding ALL prior refinement work — this will also delete the existing "
+                ".mcts_artifacts/ directory."
             )
         shutil.rmtree(ARTIFACTS_DIR)
 
@@ -111,6 +218,7 @@ def cmd_init(args):
         target_iterations=args.iterations,
         batch_size=args.batch_size,
         wildness=args.wildness,
+        max_change_fraction=args.max_change_fraction,
     )
 
     root_state_ref = ARTIFACTS_DIR / "n_0.state"
@@ -137,8 +245,28 @@ def cmd_init(args):
         "target_wildness": engine.wildness,
         "proposed_action_ids": proposed_action_ids,
         "proposed_moves_warning": warning,
-        "forced_restart": bool(args.force_restart),
+        "forced_restart": args.force_restart is not None,
         **stats_block(engine)
+    }))
+
+
+def cmd_status(args):
+    """Zero-argument, always-safe-to-call check: is there already a search
+    here? Call this first whenever tree state is uncertain (e.g. right after
+    context compaction) instead of guessing and calling init."""
+    if not TREE_FILE.exists():
+        print(json.dumps({
+            "status": "no_tree",
+            "message": "No search tree in this directory. Call init to start one.",
+        }))
+        return
+    engine = get_engine()
+    print(json.dumps({
+        "status": "tree_exists",
+        "root_id": engine.root_id,
+        "root_state_ref": engine.nodes[engine.root_id].state_ref if engine.root_id else None,
+        "message": "A search is already in progress here. Do not call init. Call step to continue.",
+        **stats_block(engine),
     }))
 
 
@@ -229,6 +357,7 @@ def cmd_step(args):
         "visits": leaf.visit_count,
         "target_batch_size": engine.batch_size,
         "target_wildness": engine.wildness,
+        "max_change_fraction": engine.max_change_fraction,
         **stats_block(engine)
     }))
 
@@ -264,6 +393,22 @@ def cmd_record(args):
         parent.actions[action_id] = Action(
             action_id=action_id, description=desc, prior=args.prior, risk=args.risk or "bold"
         )
+
+    action = parent.actions[action_id]
+    change_fraction = compute_change_fraction(Path(parent.state_ref), Path(args.new_state_path))
+    if action.risk != "wild" and not args.override_size_check:
+        if change_fraction > engine.max_change_fraction:
+            raise ValueError(
+                f"Rejected: realizing '{action.risk}' move {action_id} ({action.description!r}) "
+                f"changed an estimated {change_fraction:.0%} of the artifact, over the "
+                f"{engine.max_change_fraction:.0%} limit for non-wild moves. A 'safe'/'bold' move "
+                "must be one small, coherent change that only realizes this action's description — "
+                "not a rewrite of the whole artifact. Fix by one of: (a) redo the edit smaller, "
+                "touching only what the move describes; (b) if a large rewrite is genuinely the "
+                "right move, propose/record it as \"risk\": \"wild\" instead; (c) pass "
+                "--override-size-check only if you are certain this size is correct (e.g. a purely "
+                "mechanical reformat)."
+            )
 
     new_node_id = engine.next_id()
     new_state_ref = ARTIFACTS_DIR / f"{new_node_id}.state"
@@ -301,6 +446,7 @@ def cmd_record(args):
         "action_id": action_id,
         "state_ref": str(new_state_ref),
         "artifact_kind": artifact_kind,
+        "change_fraction": round(change_fraction, 4),
         "score": args.value,
         "proposed_action_ids": proposed_action_ids,
         "proposed_moves_warning": moves_warning,
@@ -423,10 +569,13 @@ if __name__ == "__main__":
     )
     p_init.add_argument("--iterations", type=int, default=100)
     p_init.add_argument(
-        "--force-restart", action="store_true",
+        "--force-restart", type=int, default=None, metavar="NODE_COUNT",
         help="Explicitly discard an existing .mcts_tree.json/.mcts_artifacts and start a fresh "
-             "search. init otherwise refuses to run when a tree already exists — never use this "
-             "to 'add' nodes; it deletes ALL prior refinement work."
+             "search. Must be passed the EXACT current node count (see the refusal error, or "
+             "'status') as proof you looked before discarding — a mismatched value is refused, "
+             "not corrected. Never use this to 'add' nodes; it deletes ALL prior refinement work. "
+             "If --state-file matches the existing root byte-for-byte, init auto-resumes instead "
+             "of erroring, so this flag is normally unnecessary."
     )
     p_init.add_argument(
         "--batch-size", type=int, default=4,
@@ -439,9 +588,18 @@ if __name__ == "__main__":
              "(experimental/long-shot moves) rather than \"safe\"/\"bold\" (default 0.25). Batches of "
              ">= 3 moves with zero \"wild\" entries get a nudge warning when this is > 0."
     )
+    p_init.add_argument(
+        "--max-change-fraction", type=float, default=0.4,
+        help="Ceiling, in [0,1], on the estimated fraction of the artifact a single 'safe'/'bold' "
+             "move may change (line-diff ratio for files, changed-file ratio for directories). "
+             "record rejects a move over this limit unless it's tagged \"wild\" or "
+             "--override-size-check is passed. Enforces 'one small, coherent change per move' "
+             "structurally instead of relying on the agent to self-limit (default 0.4)."
+    )
     p_init.add_argument("--moves", type=str, default=None, help='JSON list: [{"desc": "...", "prior": 0.3, "risk": "bold"}, ...]')
     p_init.add_argument("--moves-file", type=str, default=None)
 
+    sub.add_parser("status")
     sub.add_parser("step")
 
     p_propose = sub.add_parser("propose")
@@ -466,6 +624,12 @@ if __name__ == "__main__":
              "Inline text is not accepted — write the edited artifact to disk yourself first."
     )
     p_record.add_argument("--value", type=float, required=True)
+    p_record.add_argument(
+        "--override-size-check", action="store_true",
+        help="Bypass the max-change-fraction rejection for this one record call (e.g. a purely "
+             "mechanical reformat that touches every line but is semantically small). Prefer "
+             "tagging the move \"risk\": \"wild\" instead when a large change is genuinely intended."
+    )
     p_record.add_argument("--moves", type=str, default=None, help='Batch of moves to propose on the new child: [{"desc": "...", "prior": 0.3, "risk": "bold"}, ...]')
     p_record.add_argument("--moves-file", type=str, default=None)
 
@@ -477,12 +641,18 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    cmds = {
+    locked_cmds = {
         "init": cmd_init,
         "step": cmd_step,
         "propose": cmd_propose,
         "record": cmd_record,
+    }
+    unlocked_cmds = {
+        "status": cmd_status,
         "best": cmd_best,
     }
-    if args.command in cmds:
-        cmds[args.command](args)
+    if args.command in locked_cmds:
+        with TreeLock():
+            locked_cmds[args.command](args)
+    elif args.command in unlocked_cmds:
+        unlocked_cmds[args.command](args)

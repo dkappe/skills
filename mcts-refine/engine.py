@@ -103,6 +103,7 @@ class JsonMCTSEngine:
         target_iterations: int = 100,
         batch_size: int = 4,
         wildness: float = 0.25,
+        max_change_fraction: float = 0.4,
     ):
         self.c_puct = c_puct
         self.widening_c = widening_c
@@ -111,6 +112,7 @@ class JsonMCTSEngine:
         self.target_iterations = target_iterations
         self.batch_size = batch_size
         self.wildness = wildness
+        self.max_change_fraction = max_change_fraction
         self.nodes: Dict[str, MCTSNode] = {}
         self.root_id: Optional[str] = None
         self._node_counter: int = 0
@@ -324,6 +326,7 @@ class JsonMCTSEngine:
                 "target_iterations": self.target_iterations,
                 "batch_size": self.batch_size,
                 "wildness": self.wildness,
+                "max_change_fraction": self.max_change_fraction,
                 "node_counter": self._node_counter,
             },
             "root_id": self.root_id,
@@ -346,6 +349,7 @@ class JsonMCTSEngine:
             target_iterations=meta.get("target_iterations", 100),
             batch_size=meta.get("batch_size", 4),
             wildness=meta.get("wildness", 0.25),
+            max_change_fraction=meta.get("max_change_fraction", 0.4),
         )
         engine._node_counter = meta.get("node_counter", 0)
         engine.root_id = data.get("root_id")
