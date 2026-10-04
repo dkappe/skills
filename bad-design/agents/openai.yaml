@@ -1,0 +1,7 @@
+interface:
+  display_name: "bad-design"
+  short_description: "Screenshot design review, scored out of 10"
+  brand_color: "#E5484D"
+  default_prompt: "Use $bad-design to capture (if needed) and review the app screens against the issue and ADRs, and score the design out of 10 (above 8.5 passes)."
+policy:
+  allow_implicit_invocation: true

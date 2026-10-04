@@ -1,0 +1,50 @@
+{
+  "baseUrl": "http://localhost:3000",
+  "widths": [375, 768, 1440],
+  "themes": ["light", "dark"],
+  "storageState": ".auth/user.json",
+  "fullPage": true,
+  "mask": ["[data-testid=timestamp]", ".avatar-img"],
+  "themeSteps": {
+    "dark": [{ "setLocalStorage": { "theme": "dark" } }, { "reload": true }]
+  },
+  "screens": [
+    {
+      "name": "checkout",
+      "path": "/checkout",
+      "states": [
+        { "name": "default" },
+        {
+          "name": "empty",
+          "mocks": [{ "url": "**/api/cart", "json": { "items": [] } }]
+        },
+        {
+          "name": "loading",
+          "mocks": [{ "url": "**/api/cart", "hang": true }],
+          "fullPage": false
+        },
+        {
+          "name": "error",
+          "mocks": [{ "url": "**/api/cart", "status": 500, "json": { "error": "boom" } }]
+        },
+        {
+          "name": "validation",
+          "steps": [
+            { "fill": { "selector": "#email", "value": "not-an-email" } },
+            { "click": "role=button[name='Pay']" },
+            { "waitFor": "[role=alert]" }
+          ]
+        },
+        {
+          "name": "focus",
+          "steps": [{ "press": "Tab" }, { "press": "Tab" }],
+          "fullPage": false
+        }
+      ]
+    },
+    {
+      "name": "settings",
+      "path": "/settings"
+    }
+  ]
+}
